@@ -6,6 +6,7 @@
 set -euo pipefail
 
 HIVE_CONTAINER="${HIVE_CONTAINER:-hive-server}"
+HIVE_HOST="${HIVE_HOST:-hive-server}"   # <-- use container hostname, NOT localhost
 INPUT_DIR="${1:-/test/output}"
 MAX_WAIT_SECONDS="${MAX_WAIT_SECONDS:-300}"
 QUERY_TIMEOUT="${QUERY_TIMEOUT:-300}"
@@ -20,7 +21,7 @@ fi
 
 log "Waiting for HiveServer2 on port 10000 (timeout: ${MAX_WAIT_SECONDS}s)..."
 elapsed=0
-until docker exec "${HIVE_CONTAINER}" bash -c '</dev/tcp/localhost/10000' 2>/dev/null; do
+until docker exec "${HIVE_CONTAINER}" bash -c '</dev/tcp/127.0.0.1/10000' 2>/dev/null; do
   if (( elapsed >= MAX_WAIT_SECONDS )); then
     err "HiveServer2 not ready after ${MAX_WAIT_SECONDS}s."
     exit 2
@@ -49,14 +50,21 @@ EOF
 
 log "Running HiveQL query over ${INPUT_DIR} (timeout: ${QUERY_TIMEOUT}s)..."
 
-# Use timeout + </dev/null to prevent beeline from ever hanging
-if ! docker exec -i "${HIVE_CONTAINER}" timeout "${QUERY_TIMEOUT}" \
+# Force IPv4, disable JLine interactive terminal, set socket timeout
+BEELINE_OPTS='-Djline.terminal=jline.UnsupportedTerminal -Djava.net.preferIPv4Stack=true'
+
+if ! docker exec -i \
+      -e HADOOP_CLIENT_OPTS="${BEELINE_OPTS}" \
+      "${HIVE_CONTAINER}" \
+      timeout "${QUERY_TIMEOUT}" \
       beeline \
-        -u "jdbc:hive2://localhost:10000/default" \
+        -u "jdbc:hive2://${HIVE_HOST}:10000/default" \
         -n root \
         --silent=true \
         --showHeader=true \
         --outputformat=table \
+        --incremental=true \
+        --hiveconf hive.server2.thrift.client.socket.timeout=60000 \
         --hiveconf hive.server2.enable.doAs=false \
         --hiveconf hive.exec.mode.local.auto=true \
         -f /tmp/query.hql </dev/null; then
