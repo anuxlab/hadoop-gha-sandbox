@@ -1,11 +1,9 @@
-version: '3.8'
-
 services:
   namenode:
-    image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
+    image: bde2020/hadoop-namenode:${HADOOP_TAG}
     container_name: namenode
     restart: unless-stopped
-    mem_limit: 1200m
+    mem_limit: 700m
     ports:
       - "9870:9870"
       - "9000:9000"
@@ -24,10 +22,10 @@ services:
       start_period: 30s
 
   datanode:
-    image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+    image: bde2020/hadoop-datanode:${HADOOP_TAG}
     container_name: datanode
     restart: unless-stopped
-    mem_limit: 900m
+    mem_limit: 500m
     ports:
       - "9864:9864"
     environment:
@@ -48,10 +46,10 @@ services:
       start_period: 30s
 
   resourcemanager:
-    image: bde2020/hadoop-resourcemanager:2.0.0-hadoop3.2.1-java8
+    image: bde2020/hadoop-resourcemanager:${HADOOP_TAG}
     container_name: resourcemanager
     restart: unless-stopped
-    mem_limit: 1000m
+    mem_limit: 600m
     ports:
       - "8088:8088"
     environment:
@@ -73,10 +71,10 @@ services:
       start_period: 30s
 
   nodemanager:
-    image: bde2020/hadoop-nodemanager:2.0.0-hadoop3.2.1-java8
+    image: bde2020/hadoop-nodemanager:${HADOOP_TAG}
     container_name: nodemanager
     restart: unless-stopped
-    mem_limit: 1000m
+    mem_limit: 600m
     ports:
       - "8042:8042"
     environment:
