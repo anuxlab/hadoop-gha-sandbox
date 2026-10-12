@@ -6,7 +6,7 @@
 set -euo pipefail
 
 HIVE_CONTAINER="${HIVE_CONTAINER:-hive-server}"
-HIVE_HOST="${HIVE_HOST:-hive-server}"   # <-- use container hostname, NOT localhost
+HIVE_HOST="${HIVE_HOST:-hive-server}"
 INPUT_DIR="${1:-/test/output}"
 MAX_WAIT_SECONDS="${MAX_WAIT_SECONDS:-300}"
 QUERY_TIMEOUT="${QUERY_TIMEOUT:-300}"
@@ -50,7 +50,9 @@ EOF
 
 log "Running HiveQL query over ${INPUT_DIR} (timeout: ${QUERY_TIMEOUT}s)..."
 
-# Force IPv4, disable JLine interactive terminal, set socket timeout
+# Force IPv4, disable JLine, disable unnecessary logging.
+# NOTE: Do NOT pass hive.server2.thrift.client.socket.timeout — it does not
+# exist in Hive 2.3.2 and will cause HiveServer2 to reject the session.
 BEELINE_OPTS='-Djline.terminal=jline.UnsupportedTerminal -Djava.net.preferIPv4Stack=true'
 
 if ! docker exec -i \
@@ -64,7 +66,6 @@ if ! docker exec -i \
         --showHeader=true \
         --outputformat=table \
         --incremental=true \
-        --hiveconf hive.server2.thrift.client.socket.timeout=60000 \
         --hiveconf hive.server2.enable.doAs=false \
         --hiveconf hive.exec.mode.local.auto=true \
         -f /tmp/query.hql </dev/null; then
