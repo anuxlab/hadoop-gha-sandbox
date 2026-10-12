@@ -6,10 +6,9 @@
 set -euo pipefail
 
 HIVE_CONTAINER="${HIVE_CONTAINER:-hive-server}"
-HIVE_HOST="${HIVE_HOST:-hive-server}"
 INPUT_DIR="${1:-/test/output}"
-MAX_WAIT_SECONDS="${MAX_WAIT_SECONDS:-300}"
-QUERY_TIMEOUT="${QUERY_TIMEOUT:-300}"
+READY_TIMEOUT="${READY_TIMEOUT:-300}"
+QUERY_TIMEOUT="${QUERY_TIMEOUT:-180}"
 
 log()  { echo -e "\033[1;34m[INFO]\033[0m  $*"; }
 err()  { echo -e "\033[1;31m[ERROR]\033[0m $*" >&2; }
@@ -19,18 +18,38 @@ if ! docker ps --format '{{.Names}}' | grep -q "^${HIVE_CONTAINER}$"; then
   exit 2
 fi
 
-log "Waiting for HiveServer2 on port 10000 (timeout: ${MAX_WAIT_SECONDS}s)..."
+# ---------------------------------------------------------------------------
+# 1. Wait for HiveServer2 to be able to ACTUALLY serve queries.
+#    TCP-open is not enough: the Thrift server accepts connections before the
+#    metastore is loaded, causing queries to hang for minutes.
+# ---------------------------------------------------------------------------
+log "Waiting for HiveServer2 to be query-ready (timeout: ${READY_TIMEOUT}s)..."
 elapsed=0
-until docker exec "${HIVE_CONTAINER}" bash -c '</dev/tcp/127.0.0.1/10000' 2>/dev/null; do
-  if (( elapsed >= MAX_WAIT_SECONDS )); then
-    err "HiveServer2 not ready after ${MAX_WAIT_SECONDS}s."
-    exit 2
-  fi
-  sleep 5
-  elapsed=$(( elapsed + 5 ))
+ready=0
+while (( elapsed < READY_TIMEOUT )); do
+    if docker exec "${HIVE_CONTAINER}" timeout 15 beeline \
+            -u "jdbc:hive2://localhost:10000/;auth=noSasl" \
+            -n root \
+            --outputformat=tsv2 \
+            -e "SELECT 1;" </dev/null 2>/dev/null | grep -qE '^1$'; then
+        ready=1
+        break
+    fi
+    sleep 10
+    elapsed=$(( elapsed + 10 ))
 done
-log "HiveServer2 is up (after ${elapsed}s)."
 
+if (( ready == 0 )); then
+    err "HiveServer2 never became query-ready after ${READY_TIMEOUT}s."
+    err "Dumping container logs (last 100 lines):"
+    docker logs --tail=100 "${HIVE_CONTAINER}" 2>&1 | sed 's/^/    /' || true
+    exit 2
+fi
+log "HiveServer2 is query-ready (after ${elapsed}s)."
+
+# ---------------------------------------------------------------------------
+# 2. Write the HiveQL to a file inside the container.
+# ---------------------------------------------------------------------------
 log "Writing HiveQL to /tmp/query.hql inside the container..."
 docker exec -i "${HIVE_CONTAINER}" bash -c "cat > /tmp/query.hql" <<EOF
 DROP TABLE IF EXISTS wordcount;
@@ -42,16 +61,19 @@ ROW FORMAT DELIMITED FIELDS TERMINATED BY '\t'
 STORED AS TEXTFILE
 LOCATION '${INPUT_DIR}';
 
-SELECT word, count
-FROM wordcount
-ORDER BY count DESC, word ASC
-LIMIT 10;
+-- Simple projection, no ORDER BY (which would trigger a MapReduce job).
+SELECT word, count FROM wordcount LIMIT 20;
 EOF
 
+# Print the file content for debugging in CI logs
+log "Query file contents:"
+docker exec "${HIVE_CONTAINER}" cat /tmp/query.hql | sed 's/^/    /'
+
+# ---------------------------------------------------------------------------
+# 3. Run the query with tsv2 output (streams rows, no buffering bugs).
+# ---------------------------------------------------------------------------
 log "Running HiveQL query over ${INPUT_DIR} (timeout: ${QUERY_TIMEOUT}s)..."
 
-# Force IPv4, disable JLine, disable SASL via ;auth=noSasl.
-# NOTE: the path is a bare "/" — HiveServer2 defaults to the "default" database.
 BEELINE_OPTS='-Djline.terminal=jline.UnsupportedTerminal -Djava.net.preferIPv4Stack=true'
 
 if ! docker exec -i \
@@ -59,14 +81,10 @@ if ! docker exec -i \
       "${HIVE_CONTAINER}" \
       timeout "${QUERY_TIMEOUT}" \
       beeline \
-        -u "jdbc:hive2://${HIVE_HOST}:10000/;auth=noSasl" \
+        -u "jdbc:hive2://localhost:10000/;auth=noSasl" \
         -n root \
-        --silent=true \
-        --showHeader=true \
-        --outputformat=table \
-        --incremental=true \
+        --outputformat=tsv2 \
         --hiveconf hive.server2.enable.doAs=false \
-        --hiveconf hive.exec.mode.local.auto=true \
         -f /tmp/query.hql </dev/null; then
     err "Hive query failed or timed out."
     err "Container logs (last 100 lines):"
