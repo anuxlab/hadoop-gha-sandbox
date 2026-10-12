@@ -5,6 +5,7 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   test-hadoop:
@@ -14,32 +15,34 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Start Hadoop Cluster
-        run: docker-compose up -d
-
-      - name: Wait for Cluster to be Ready
+      - name: Show Docker versions
         run: |
-          echo "Waiting for NameNode..."
-          timeout 180 bash -c 'until curl -s http://localhost:9870; do sleep 5; done'
-          echo "Waiting for ResourceManager..."
-          timeout 180 bash -c 'until curl -s http://localhost:8088; do sleep 5; done'
-          echo "Cluster is ready."
+          docker --version
+          docker compose version
 
-      - name: Create Test Data in HDFS
+      - name: Free up disk space
         run: |
-          docker exec namenode hdfs dfs -mkdir -p /test/input
-          docker exec namenode bash -c 'echo "Hello Hadoop World Hello MapReduce Hello Docker" > /tmp/test.txt'
-          docker exec namenode hdfs dfs -put /tmp/test.txt /test/input/
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android || true
+          df -h
 
-      - name: Run MapReduce WordCount Job
+      - name: Start Hadoop Cluster (wait for health)
         run: |
-          docker exec namenode hadoop jar /opt/hadoop-3.2.1/share/hadoop/mapreduce/hadoop-mapreduce-examples-3.2.1.jar wordcount /test/input /test/output
+          docker compose up -d --wait --wait-timeout 300
+          docker compose ps
 
-      - name: Verify Results
+      - name: Run WordCount pipeline
         run: |
-          echo "MapReduce Output:"
-          docker exec namenode hdfs dfs -cat /test/output/part-r-00000
+          chmod +x scripts/run-wordcount.sh
+          ./scripts/run-wordcount.sh
+
+      - name: Dump container logs on failure
+        if: failure()
+        run: |
+          echo "===== docker compose ps ====="
+          docker compose ps
+          echo "===== docker compose logs ====="
+          docker compose logs --no-color --tail=200
 
       - name: Stop Hadoop Cluster
         if: always()
-        run: docker-compose down -v
+        run: docker compose down -v
