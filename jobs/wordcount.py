@@ -1,5 +1,8 @@
 """
 PySpark WordCount that reads from HDFS and writes back to HDFS.
+
+NOTE: The bde2020/spark-* images ship Python 2.7, so this script uses
+Python 2/3-compatible syntax (no f-strings, no type hints).
 """
 from pyspark.sql import SparkSession
 
@@ -23,8 +26,9 @@ def main():
     print("=" * 50)
     print("PySpark WordCount Results")
     print("=" * 50)
+    # Python 2/3 compatible — the Alpine Spark image uses Python 2.7
     for word, count in sorted(counts.collect(), key=lambda x: -x[1]):
-        print(f"{word}\t{count}")
+        print("{0}\t{1}".format(word, count))
     print("=" * 50)
 
     # Save to HDFS (remove first if it exists)
