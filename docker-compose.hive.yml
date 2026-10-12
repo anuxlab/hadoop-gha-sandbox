@@ -4,6 +4,12 @@ services:
     container_name: hive-metastore-postgresql
     restart: unless-stopped
     mem_limit: 400m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hive -d metastore || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
     networks:
       - hadoop_net
 
@@ -11,11 +17,14 @@ services:
     image: bde2020/hive:2.3.2-postgresql-metastore
     container_name: hive-server
     restart: unless-stopped
-    mem_limit: 800m
+    mem_limit: 1000m
     ports:
       - "10000:10000"
       - "10002:10002"
     environment:
+      # ---- THE FIX: tell Hive where HDFS lives ----
+      - HIVE_CORE_CONF_fs_defaultFS=hdfs://namenode:9000
+      # ---------------------------------------------
       - HIVE_CORE_CONF_javax_jdo_option_ConnectionURL=jdbc:postgresql://hive-metastore-postgresql/metastore
       - HIVE_SITE_CONF_javax_jdo_option_ConnectionURL=jdbc:postgresql://hive-metastore-postgresql/metastore
       - HIVE_SITE_CONF_datanucleus_autoCreateSchema=false
@@ -28,12 +37,12 @@ services:
       resourcemanager:
         condition: service_healthy
       hive-metastore-postgresql:
-        condition: service_started
+        condition: service_healthy
     networks:
       - hadoop_net
     healthcheck:
-      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/10000' || exit 1"]
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/10000' || wget -q --spider http://localhost:10002 || exit 1"]
       interval: 15s
       timeout: 10s
-      retries: 30
-      start_period: 60s
+      retries: 40
+      start_period: 120s
