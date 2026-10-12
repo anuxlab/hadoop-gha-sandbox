@@ -60,7 +60,7 @@ if ! docker exec -i \
       "${HIVE_CONTAINER}" \
       timeout "${QUERY_TIMEOUT}" \
       beeline \
-        -u "jdbc:hive2://${HIVE_HOST}:10000/default;auth=noSasl" \
+        -u "jdbc:hive2://${HIVE_HOST}:10000/default/;auth=noSasl" \
         -n root \
         --silent=true \
         --showHeader=true \
