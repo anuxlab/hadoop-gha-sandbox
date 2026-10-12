@@ -1,0 +1,45 @@
+name: Test Hadoop Cluster
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test-hadoop:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Start Hadoop Cluster
+        run: docker-compose up -d
+
+      - name: Wait for Cluster to be Ready
+        run: |
+          echo "Waiting for NameNode..."
+          timeout 180 bash -c 'until curl -s http://localhost:9870; do sleep 5; done'
+          echo "Waiting for ResourceManager..."
+          timeout 180 bash -c 'until curl -s http://localhost:8088; do sleep 5; done'
+          echo "Cluster is ready."
+
+      - name: Create Test Data in HDFS
+        run: |
+          docker exec namenode hdfs dfs -mkdir -p /test/input
+          docker exec namenode bash -c 'echo "Hello Hadoop World Hello MapReduce Hello Docker" > /tmp/test.txt'
+          docker exec namenode hdfs dfs -put /tmp/test.txt /test/input/
+
+      - name: Run MapReduce WordCount Job
+        run: |
+          docker exec namenode hadoop jar /opt/hadoop-3.2.1/share/hadoop/mapreduce/hadoop-mapreduce-examples-3.2.1.jar wordcount /test/input /test/output
+
+      - name: Verify Results
+        run: |
+          echo "MapReduce Output:"
+          docker exec namenode hdfs dfs -cat /test/output/part-r-00000
+
+      - name: Stop Hadoop Cluster
+        if: always()
+        run: docker-compose down -v
