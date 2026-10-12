@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 PySpark WordCount that reads from HDFS and writes back to HDFS.
 
@@ -8,6 +9,7 @@ from pyspark.sql import SparkSession
 
 INPUT_PATH = "hdfs://namenode:9000/test/input"
 OUTPUT_PATH = "hdfs://namenode:9000/test/spark-output"
+
 
 def main():
     spark = SparkSession.builder \
@@ -26,7 +28,7 @@ def main():
     print("=" * 50)
     print("PySpark WordCount Results")
     print("=" * 50)
-    # Python 2/3 compatible — the Alpine Spark image uses Python 2.7
+    # Python 2/3 compatible - the Alpine Spark image uses Python 2.7
     for word, count in sorted(counts.collect(), key=lambda x: -x[1]):
         print("{0}\t{1}".format(word, count))
     print("=" * 50)
@@ -39,6 +41,7 @@ def main():
     counts.saveAsTextFile(OUTPUT_PATH)
 
     spark.stop()
+
 
 if __name__ == "__main__":
     main()
