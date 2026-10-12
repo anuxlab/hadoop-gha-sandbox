@@ -50,9 +50,8 @@ EOF
 
 log "Running HiveQL query over ${INPUT_DIR} (timeout: ${QUERY_TIMEOUT}s)..."
 
-# Force IPv4, disable JLine, disable unnecessary logging.
-# NOTE: Do NOT pass hive.server2.thrift.client.socket.timeout — it does not
-# exist in Hive 2.3.2 and will cause HiveServer2 to reject the session.
+# Force IPv4, disable JLine, disable SASL via ;auth=noSasl in the JDBC URL.
+# NOTE: The trailing slash after "default" is required.
 BEELINE_OPTS='-Djline.terminal=jline.UnsupportedTerminal -Djava.net.preferIPv4Stack=true'
 
 if ! docker exec -i \
