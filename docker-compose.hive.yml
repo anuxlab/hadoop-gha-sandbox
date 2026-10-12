@@ -4,6 +4,10 @@ services:
     container_name: hive-metastore-postgresql
     restart: unless-stopped
     mem_limit: 400m
+    environment:
+      - POSTGRES_DB=metastore
+      - POSTGRES_USER=hive
+      - POSTGRES_PASSWORD=hive
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U hive -d metastore || exit 1" ]
       interval: 5s
