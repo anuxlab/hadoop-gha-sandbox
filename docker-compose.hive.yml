@@ -1,0 +1,39 @@
+services:
+  hive-metastore-postgresql:
+    image: bde2020/hive-metastore-postgresql:2.3.0
+    container_name: hive-metastore-postgresql
+    restart: unless-stopped
+    mem_limit: 400m
+    networks:
+      - hadoop_net
+
+  hive-server:
+    image: bde2020/hive:2.3.2-postgresql-metastore
+    container_name: hive-server
+    restart: unless-stopped
+    mem_limit: 800m
+    ports:
+      - "10000:10000"
+      - "10002:10002"
+    environment:
+      - HIVE_CORE_CONF_javax_jdo_option_ConnectionURL=jdbc:postgresql://hive-metastore-postgresql/metastore
+      - HIVE_SITE_CONF_javax_jdo_option_ConnectionURL=jdbc:postgresql://hive-metastore-postgresql/metastore
+      - HIVE_SITE_CONF_datanucleus_autoCreateSchema=false
+      - SERVICE_PRECONDITION=namenode:9870 datanode:9864 resourcemanager:8088 hive-metastore-postgresql:5432
+    depends_on:
+      namenode:
+        condition: service_healthy
+      datanode:
+        condition: service_healthy
+      resourcemanager:
+        condition: service_healthy
+      hive-metastore-postgresql:
+        condition: service_started
+    networks:
+      - hadoop_net
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/10000' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 30
+      start_period: 60s
