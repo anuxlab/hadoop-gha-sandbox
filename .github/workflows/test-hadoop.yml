@@ -1,4 +1,4 @@
-name: Test Hadoop Cluster
+name: Test Hadoop Ecosystem
 
 on:
   push:
@@ -8,8 +8,22 @@ on:
   workflow_dispatch:
 
 jobs:
-  test-hadoop:
+  test:
+    name: test (${{ matrix.profile }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: core
+            compose_args: "-f docker-compose.yml"
+            runner: core
+          - profile: hive
+            compose_args: "-f docker-compose.yml -f docker-compose.hive.yml"
+            runner: hive
+          - profile: spark
+            compose_args: "-f docker-compose.yml -f docker-compose.spark.yml"
+            runner: spark
 
     steps:
       - name: Checkout repository
@@ -20,29 +34,40 @@ jobs:
           docker --version
           docker compose version
 
-      - name: Free up disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android || true
-          df -h
+      - name: Pull images
+        run: docker compose ${{ matrix.compose_args }} pull
 
-      - name: Start Hadoop Cluster (wait for health)
+      - name: Start cluster (wait for health)
         run: |
-          docker compose up -d --wait --wait-timeout 300
-          docker compose ps
+          docker compose ${{ matrix.compose_args }} up -d --wait --wait-timeout 300
+          docker compose ${{ matrix.compose_args }} ps
 
-      - name: Run WordCount pipeline
+      # ---------- core pipeline: HDFS + MapReduce ----------
+      - name: Run WordCount (HDFS + MapReduce)
         run: |
           chmod +x scripts/run-wordcount.sh
           ./scripts/run-wordcount.sh
 
+      # ---------- hive pipeline ----------
+      - name: Run Hive query
+        if: matrix.profile == 'hive'
+        run: |
+          chmod +x scripts/run-hive-query.sh
+          ./scripts/run-hive-query.sh /test/output
+
+      # ---------- spark pipeline ----------
+      - name: Run Spark job
+        if: matrix.profile == 'spark'
+        run: |
+          chmod +x scripts/run-spark-job.sh
+          ./scripts/run-spark-job.sh
+
       - name: Dump container logs on failure
         if: failure()
         run: |
-          echo "===== docker compose ps ====="
-          docker compose ps
-          echo "===== docker compose logs ====="
-          docker compose logs --no-color --tail=200
+          docker compose ${{ matrix.compose_args }} ps
+          docker compose ${{ matrix.compose_args }} logs --no-color --tail=200
 
-      - name: Stop Hadoop Cluster
+      - name: Stop cluster
         if: always()
-        run: docker compose down -v
+        run: docker compose ${{ matrix.compose_args }} down -v
