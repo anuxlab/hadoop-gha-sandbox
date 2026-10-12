@@ -50,8 +50,8 @@ EOF
 
 log "Running HiveQL query over ${INPUT_DIR} (timeout: ${QUERY_TIMEOUT}s)..."
 
-# Force IPv4, disable JLine, disable SASL via ;auth=noSasl in the JDBC URL.
-# NOTE: The trailing slash after "default" is required.
+# Force IPv4, disable JLine, disable SASL via ;auth=noSasl.
+# NOTE: the path is a bare "/" — HiveServer2 defaults to the "default" database.
 BEELINE_OPTS='-Djline.terminal=jline.UnsupportedTerminal -Djava.net.preferIPv4Stack=true'
 
 if ! docker exec -i \
@@ -59,7 +59,7 @@ if ! docker exec -i \
       "${HIVE_CONTAINER}" \
       timeout "${QUERY_TIMEOUT}" \
       beeline \
-        -u "jdbc:hive2://${HIVE_HOST}:10000/default/;auth=noSasl" \
+        -u "jdbc:hive2://${HIVE_HOST}:10000/;auth=noSasl" \
         -n root \
         --silent=true \
         --showHeader=true \
