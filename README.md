@@ -11,9 +11,9 @@ A small, reusable integration-test framework for validating HDFS, YARN/MapReduce
 - **Spark:** PySpark on a standalone Spark master/worker, reading the same HDFS input and comparing results with MapReduce.
 - **Full stack:** Core + Hive + Spark concurrently in one Compose project.
 - **Distributed:** Two DataNodes, two NodeManagers, two Spark workers; asserts live HDFS replicas and records executor hosts.
-- **Scale:** A manually triggered, parameterized workload profile uses many input files and a small HDFS block size to exercise multiple HDFS blocks/splits, YARN MapReduce counters, replication on distinct DataNodes, and Spark WordCount execution on multiple workers.
+- **Scale:** A bounded workload runs automatically on relevant pull requests and pushes and on a daily schedule. It exercises multiple HDFS blocks/splits, YARN MapReduce counters/reducers, replication on distinct DataNodes, and Spark WordCount execution on multiple workers.
 
-The supplied diagnostics from run set `38378261082` / `38378261105` / `38378261106` show that core, Hive, standalone Spark, full-stack, and distributed profiles passed their current assertions. The scale profile and the stronger instrumentation introduced with it are new and have only been statically/regression validated in this package; run `test-scale.yml` in GitHub Actions before treating the new workload as integration-validated.
+The uploaded diagnostics from runs `38378261082` / `38378261105` / `38378261106` establish the earlier core, Hive, standalone Spark, full-stack, and distributed baselines. The scale profile subsequently passed GitHub Actions run `38383224133`: 24 files and 19,200 records produced 48 MapReduce splits, all 48 HDFS blocks had two live replicas on distinct DataNodes, Spark WordCount used two worker hosts, and Spark/MapReduce outputs matched. The newly added resilience workflow is automated but still needs its first live Actions run.
 
 ## Architecture
 
@@ -54,11 +54,12 @@ All services within a selected profile share a Compose bridge network and resolv
 | `core` | `docker-compose.yml` | HDFS operations, worker registration, YARN MapReduce, expected counts | Every push/PR to `main` through the profile matrix |
 | `hive` | Base + `docker-compose.hive.yml` | PostgreSQL availability, HiveServer2 query readiness, exact HiveQL results from HDFS | Every push/PR to `main` through the profile matrix |
 | `spark` | Base + `docker-compose.spark.yml` | Spark worker registration, executor-host probe, HDFS write, Spark/MapReduce equality | Every push/PR to `main` through the profile matrix |
-| `full` | Base + Hive + Spark overlays | Runs MapReduce, Hive, and Spark sequentially against one stack | Automatic on relevant code PRs/pushes to `main`; manual dispatch |
-| `distributed` | Base + Spark + distributed overlay | Two DataNodes/NodeManagers/workers; replication checked against live distinct DataNode endpoints; Spark scheduling probe on distinct hosts | Automatic on relevant code PRs/pushes to `main`; manual dispatch; nightly **disabled** |
-| `scale` | Base + Spark + distributed + scale overlay | Parameterized multi-file/multi-block input; multiple MapReduce splits and record counters; replication for all input blocks; Spark WordCount input partitions observed on multiple worker hosts | **Manual only** through `test-scale.yml`; no schedule by default |
+| `full` | Base + Hive + Spark overlays | Runs MapReduce, Hive, and Spark sequentially against one stack | Automatic on relevant code PRs/pushes to `main` and daily schedule; manual reruns optional |
+| `distributed` | Base + Spark + distributed overlay | Two DataNodes/NodeManagers/workers; replication checked against live distinct DataNode endpoints; Spark scheduling probe on distinct hosts | Automatic on relevant code PRs/pushes to `main` and daily schedule; manual reruns optional |
+| `scale` | Base + Spark + distributed + scale overlay | Bounded multi-file/multi-block input; MapReduce splits, counters and reducers; every input block replicated on distinct DataNodes; actual Spark WordCount participation on multiple hosts | Automatic on relevant code PRs/pushes to `main` and daily schedule; manual input overrides optional |
+| `resilience` | Base + Spark + distributed overlay | Stops DataNode 2; verifies HDFS read and MapReduce success with one live DataNode; restarts it and checks replica recovery | Automatic on relevant code PRs/pushes to `main` and daily schedule; manual reruns optional |
 
-`test-hadoop.yml` intentionally keeps a simple matrix of core/Hive/Spark profiles. The full-stack and distributed workflows use path filters so documentation-only edits do not start their larger stacks. The distributed workflow contains a commented example schedule; no nightly run is enabled until you uncomment it. The scale workflow is manually triggered and accepts workload size inputs to control runner cost. Its defaults are 24 files × 800 lines, two reducers, two DataNodes and two Spark workers; input bounds are validated before the containers are started.
+`test-hadoop.yml` runs the core/Hive/Spark matrix automatically on pull requests, pushes to `main`, and daily. Full-stack, distributed, scale, and resilience workflows are path-filtered for relevant code/configuration changes and also have daily scheduled runs. `workflow_dispatch` remains available as an optional rerun mechanism, not as a prerequisite for testing. Automated scale runs use 24 files × 800 lines, two reducers, two DataNodes and two Spark workers; optional manual inputs remain bounded and validated before containers start.
 
 ## Compatibility and versions
 
@@ -76,11 +77,11 @@ These are community-maintained container images, not Apache-distributed producti
 
 ## Validation evidence
 
-See [Validation Evidence and Remaining Gates](docs/VALIDATION.md) for the uploaded CI run IDs, the exact assertions visible in their logs, the static checks performed for this package, and the new scale test's outstanding live-CI validation. This separates known passing behavior from newly added code that still requires a GitHub Actions run.
+See [Validation Evidence and Remaining Gates](docs/VALIDATION.md) for uploaded CI run IDs, exact assertions visible in their logs, and the remaining live-CI gate for the newly added resilience profile.
 
 ## Scaling and adding components
 
-The detailed [Scaling and Component Extension Guide](docs/SCALING_AND_COMPONENTS.md) defines staged test tiers, the bounded scale workload, suggested HDFS/YARN/Spark resilience tests, optional component candidates, and a contract for adding a new Compose overlay without turning the base cluster into an oversized stack. Read this before adding components or enabling scheduled scale tests.
+The detailed [Scaling and Component Extension Guide](docs/SCALING_AND_COMPONENTS.md) defines staged test tiers, the bounded scale workload, the controlled DataNode outage/recovery profile, optional component candidates, and a contract for adding Compose overlays without turning the base cluster into an oversized stack.
 
 ## Requirements
 
@@ -107,12 +108,13 @@ bash scripts/run-profile.sh hive
 bash scripts/run-profile.sh spark
 bash scripts/run-profile.sh full
 bash scripts/run-profile.sh distributed
+bash scripts/run-profile.sh resilience
 
-# Parameterized multi-file/multi-block scale run (manual/opt-in only).
+# Parameterized multi-file/multi-block scale run (same defaults used by automated CI).
 SCALE_FILES=24 SCALE_LINES_PER_FILE=800 bash scripts/run-profile.sh scale
 ```
 
-You do not need to run every profile locally every time. Start with `core`, then the profile you changed. Use `full` before merging broad cross-component changes, `distributed` for multi-worker registration/replication, and `scale` when you need to verify many input splits and actual Spark WordCount processing on multiple workers.
+You do not need to run every profile locally every time. Start with `core`, then the profile you changed. Use `full` for cross-component interoperability, `distributed` for multi-worker registration/replication, `scale` for many input splits and actual Spark WordCount processing across workers, and `resilience` for a controlled DataNode outage/recovery check.
 
 Useful runner options:
 
@@ -189,44 +191,33 @@ SCALE_FILES=48 SCALE_LINES_PER_FILE=1500 bash scripts/run-profile.sh scale
 
 The runner enforces `2 <= SCALE_FILES <= 128`, `600 <= SCALE_LINES_PER_FILE <= 2000`, and at most 128,000 records. These bounds prevent accidental unbounded loads in CI. It checks (1) every HDFS block has the requested number of live replicas on distinct DataNodes, (2) the number of input splits exceeds the number of files, (3) MapReduce's `Map input records` counter equals the generated record count, (4) normalized output counts equal the deterministic expected counts, and (5) the actual Spark WordCount input path was processed on at least two distinct executor hosts. It then compares Spark output with the MapReduce output.
 
-The scale workflow `.github/workflows/test-scale.yml` is **manual only** by default. Use Actions → *Scalable HDFS and compute integration test* → *Run workflow*, then provide the `files` and `lines_per_file` inputs. You can also run it locally with `SCALE_FILES` and `SCALE_LINES_PER_FILE`. No nightly schedule is enabled for the scale workflow.
+The scale workflow `.github/workflows/test-scale.yml` runs automatically for relevant pull requests, pushes to `main`, and daily. Automated events use 24 files × 800 lines and two reducers. Optional manual reruns can override those values; local runs use `SCALE_FILES`, `SCALE_LINES_PER_FILE`, and `SCALE_REDUCERS`.
 
 ## GitHub Actions automation
 
-The repository contains three workflows:
+All five test workflows run automatically; none relies on a manual button click:
 
-- `.github/workflows/test-hadoop.yml`: core/Hive/Spark matrix on pushes and pull requests targeting `main`, plus manual dispatch.
-- `.github/workflows/test-full-stack.yml`: full stack automatically on pushes/pull requests targeting `main` when Compose, job, script, Hive, or workflow files change; also manually dispatchable.
-- `.github/workflows/test-distributed.yml`: distributed profile automatically on relevant code pushes/pull requests and manually dispatchable. Its nightly `schedule` block is **commented out**.
-- `.github/workflows/test-scale.yml`: parameterized scale workload triggered manually only; no schedule by default.
+- `.github/workflows/test-hadoop.yml`: core/Hive/Spark matrix on pull requests, pushes to `main`, and daily.
+- `.github/workflows/test-full-stack.yml`: full stack on relevant pull requests/pushes and daily.
+- `.github/workflows/test-distributed.yml`: distributed topology on relevant pull requests/pushes and daily.
+- `.github/workflows/test-scale.yml`: bounded multi-block scale workload on relevant pull requests/pushes and daily; automated events use safe default inputs.
+- `.github/workflows/test-resilience.yml`: DataNode outage/recovery integration test on relevant pull requests/pushes and daily.
 
-The workflows use minimal `contents: read` permissions, `set -Eeuo pipefail` when piping test logs through `tee`, timeouts, diagnostic collection with `if: always()`, artifact uploads, and `docker compose down -v --remove-orphans`. Diagnostic artifacts are retained for seven days. The full-stack and distributed profiles are more expensive than a single-profile matrix job, so watch Actions minutes and runner memory after enabling automatic triggers.
+Optional `workflow_dispatch` triggers remain for reruns or tuning the scale workload; normal CI does not depend on them. The schedules run on the repository's default branch and use UTC. GitHub may delay scheduled starts during periods of high load, so cron times are not exact guarantees. Full-stack, distributed, scale, and resilience runs are path-filtered on PR/push events to avoid starting Docker stacks for unrelated documentation-only edits.
 
-To run manually with GitHub CLI:
+The workflows use minimal `contents: read` permissions, bounded timeouts, failure-preserving `pipefail`, diagnostic collection with `if: always()`, artifact uploads, and cleanup. Diagnostics are retained for seven days for smoke/integration workflows and 14 days for scale/resilience runs.
+
+To inspect recent status or watch a run with GitHub CLI:
 
 ```bash
-gh workflow run test-full-stack.yml --ref main
-gh workflow run test-distributed.yml --ref main
-# Scale workflow is manually dispatched with bounded input settings in the UI;
-# for CLI use, pass workflow inputs supported by your gh version:
-gh workflow run test-scale.yml --ref main -f files=24 -f lines_per_file=800
-
-gh run list --workflow test-full-stack.yml --limit 3 \
+gh run list --workflow test-scale.yml --limit 3 \
   --json databaseId,status,conclusion,url --jq '.[] | [.databaseId,.status,.conclusion,.url] | @tsv'
+gh run list --workflow test-resilience.yml --limit 3 \
+  --json databaseId,status,conclusion,url --jq '.[] | [.databaseId,.status,.conclusion,.url] | @tsv'
+# Optional only: use gh workflow run <workflow.yml> to request a manual rerun.
 ```
 
-To watch a specific run, copy its numeric `databaseId` and run `gh run watch <ID> --exit-status`. Download its artifact from the Actions UI or with `gh run download <ID>`.
-
-### Optional nightly distributed run (disabled by default)
-
-When you're ready to spend runner time on a nightly regression, edit `.github/workflows/test-distributed.yml` and uncomment:
-
-```yaml
-  schedule:
-    - cron: '37 2 * * *' # 02:37 UTC = 08:07 Asia/Kolkata
-```
-
-Commit the change to the default branch. GitHub's scheduled workflows run from the default branch and can be delayed during periods of high load; a scheduled trigger is not an exact-time guarantee. Do not uncomment this until the distributed profile has passed at least one manual run on the current code.
+All `schedule` triggers are enabled in the workflow files. GitHub scheduled workflows run from the default branch, and execution can be delayed during high load. If runner minutes or Docker memory become constrained, lower the schedule frequency while keeping PR/push checks automatic.
 
 ## Use this codebase as a framework for other HDFS components
 
@@ -268,12 +259,12 @@ Scale the *test properties you need to prove*, not simply the number of containe
 
 1. **Single-worker smoke tests:** cheap checks for config, HDFS I/O, YARN execution, Hive query behavior and Spark interoperability.
 2. **Two-worker integration:** prove replication factor 2, live replica locations, two registered YARN nodes, two registered Spark workers and Spark task participation on distinct hosts.
-3. **Multi-block / parallel workload tests:** the opt-in `scale` profile generates files larger than the dedicated 16 KiB HDFS block size, creates multiple input splits, asserts MapReduce input counters, checks HDFS replicas for all blocks, and records worker hosts for the actual Spark WordCount data path. Do not infer parallelism from service count or from a scheduling-only probe.
-4. **Resilience profile:** deliberately stop a worker while a job is running, then assert expected retries/recovery and final job outcome. Run separately from ordinary PR tests to reduce flakiness.
+3. **Multi-block / parallel workload tests:** the bounded `scale` profile generates files larger than the dedicated 16 KiB HDFS block size, creates multiple input splits, asserts MapReduce input counters, checks HDFS replicas for all blocks, and records worker hosts for the actual Spark WordCount data path. Do not infer parallelism from service count or from a scheduling-only probe.
+4. **Resilience profile:** stops DataNode 2 after the baseline dataset is written, verifies the surviving replica can be read, runs a MapReduce job with the surviving DataNode, restarts DataNode 2, and checks restored replication. It runs as a separate automated profile to isolate disruption and diagnostics.
 5. **Version matrix:** test compatible versions only. Use separate matrix jobs/profiles for tested Hadoop/Spark/Hive combinations; do not assume arbitrary cross-version compatibility.
 6. **Larger runners / independent VMs:** if combined memory usage is unstable, use a larger hosted runner or a multi-host lab. To test NameNode HA, ResourceManager HA, rack awareness, Kerberos, true network partitions or independent host failures, a same-runner Compose profile is insufficient.
 
-Do not run all high-cost profiles on every small documentation change. The current trigger setup runs the full stack and distributed profile for relevant code changes, keeps manual dispatch for every workflow, keeps the scale workload manual-only, and leaves nightly distributed runs off until deliberately enabled.
+Path filters avoid launching full-stack, distributed, scale, and resilience Compose stacks for unrelated documentation-only changes. All workflows also run daily on a schedule; manual dispatch is only an optional rerun path, not required for testing. The scale workload uses bounded defaults to control CI resource usage.
 
 ## Troubleshooting
 

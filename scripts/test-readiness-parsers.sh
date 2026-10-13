@@ -169,6 +169,7 @@ workflows = [
     ".github/workflows/test-distributed.yml",
     ".github/workflows/test-full-stack.yml",
     ".github/workflows/test-scale.yml",
+    ".github/workflows/test-resilience.yml",
 ]
 for rel in workflows:
     lines = (root / rel).read_text().splitlines()
@@ -243,34 +244,44 @@ if line_bytes * minimum_lines <= block_size:
 print("[PASS] Minimum scale fixture crosses the 16 KiB HDFS block boundary.")
 SCALEGEOMETRY
 
-# Workflow triggers: full stack auto-runs on relevant PRs/pushes; distributed
-# runs on relevant PRs/pushes and manual dispatch. Nightly schedule stays off.
+# Regression: every test tier must run automatically on relevant repository events.
 python3 - "$ROOT" <<'PYWORKFLOW'
 import pathlib, re, sys
 root = pathlib.Path(sys.argv[1])
-full = (root / ".github/workflows/test-full-stack.yml").read_text()
-distributed = (root / ".github/workflows/test-distributed.yml").read_text()
-for name, text in (("full-stack", full), ("distributed", distributed)):
-    for event in ("pull_request", "push", "workflow_dispatch"):
+workflow_names = [
+    "test-hadoop.yml",
+    "test-full-stack.yml",
+    "test-distributed.yml",
+    "test-scale.yml",
+    "test-resilience.yml",
+]
+workflow_text = {}
+for filename in workflow_names:
+    path = root / ".github/workflows" / filename
+    if not path.is_file():
+        raise SystemExit(f"FAIL: required automated workflow is missing: {filename}")
+    text = path.read_text()
+    workflow_text[filename] = text
+    for event in ("pull_request", "push", "schedule"):
         if not re.search(r"(?m)^  " + re.escape(event) + r":", text):
-            raise SystemExit(f"FAIL: {name} workflow is missing {event} trigger")
-if re.search(r"(?m)^  schedule:", distributed):
-    raise SystemExit("FAIL: nightly schedule must remain disabled until explicitly enabled")
-if not re.search(r"(?m)^  # schedule:", distributed):
-    raise SystemExit("FAIL: distributed workflow should document the optional nightly schedule")
-runner = (root / "scripts/run-profile.sh")
+            raise SystemExit(f"FAIL: {filename} is missing automatic {event} trigger")
+
+runner = root / "scripts/run-profile.sh"
 if not runner.exists():
     raise SystemExit("FAIL: local reusable profile runner is missing")
-if "docker-compose.yml:docker-compose.spark.yml:docker-compose.distributed.yml:docker-compose.scale.yml" not in runner.read_text():
-    raise SystemExit("FAIL: scale profile must layer the scale overlay after the distributed services")
-scale_workflow = (root / ".github/workflows/test-scale.yml").read_text()
-for profile in ("core", "hive", "spark", "full", "distributed", "scale"):
-    if profile not in runner.read_text():
+runner_text = runner.read_text()
+for profile in ("core", "hive", "spark", "full", "distributed", "scale", "resilience"):
+    if profile not in runner_text:
         raise SystemExit(f"FAIL: local profile runner is missing profile {profile}")
-if not re.search(r"(?m)^  workflow_dispatch:", scale_workflow):
-    raise SystemExit("FAIL: scalable workload must be manually dispatchable")
-if re.search(r"(?m)^  schedule:", scale_workflow):
-    raise SystemExit("FAIL: scalable workflow must not enable a schedule by default")
+if "docker-compose.yml:docker-compose.spark.yml:docker-compose.distributed.yml:docker-compose.scale.yml" not in runner_text:
+    raise SystemExit("FAIL: scale profile must layer the scale overlay after the distributed services")
+if "scripts/run-resilience-test.sh" not in runner_text:
+    raise SystemExit("FAIL: resilience profile must invoke its controlled outage/recovery harness")
+
+scale_workflow = workflow_text["test-scale.yml"]
+for default in ("github.event.inputs.files || '24'", "github.event.inputs.lines_per_file || '800'", "github.event.inputs.reducers || '2'"):
+    if default not in scale_workflow:
+        raise SystemExit(f"FAIL: automated scale event must have a safe default for {default}")
 scale_script = (root / "scripts/run-scale-test.sh").read_text()
 for marker in ("number of splits", "Map input records=", "Launched reduce tasks=", "assert-hdfs-replication.py", "REQUIRE_SPARK_DATA_WORKER_PARTICIPATION=1"):
     if marker not in scale_script:
@@ -280,17 +291,29 @@ if 'HDFS_CONF_dfs_blocksize: "16384"' not in scale_compose:
     raise SystemExit("FAIL: scale overlay must use small blocks to exercise multi-block splits")
 if 'HDFS_CONF_dfs_namenode_fs___limits_min___block___size: "16384"' not in scale_compose:
     raise SystemExit("FAIL: NameNode minimum block size must be lowered to 16 KiB in the isolated scale overlay")
-# The bde2020 image convention maps single underscores to dots and triple
-# underscores to hyphens; assert this setting maps to Hadoop's exact property.
 encoded = "dfs_namenode_fs___limits_min___block___size"
 decoded = encoded.replace("___", "-").replace("_", ".")
 if decoded != "dfs.namenode.fs-limits.min-block-size":
     raise SystemExit(f"FAIL: scale minimum-block-size env maps to {decoded!r}")
-scale_script = (root / "scripts/run-scale-test.sh").read_text()
 for marker in ("dfs.blocksize", "dfs.namenode.fs-limits.min-block-size", "configured_min_block_size"):
     if marker not in scale_script:
         raise SystemExit(f"FAIL: scale harness must preflight effective HDFS configuration ({marker})")
-print("[PASS] CI triggers, scale assertions, and tiny-block NameNode configuration are consistent.")
+
+resilience_script = (root / "scripts/run-resilience-test.sh").read_text()
+for marker in (
+    "compose stop -t 10 datanode2",
+    "hdfs dfs -cat",
+    "mapreduce.job.reduces=1",
+    "Final-State",
+    "compose start datanode2",
+    "assert-hdfs-replication.py",
+):
+    if marker not in resilience_script:
+        raise SystemExit(f"FAIL: resilience harness is missing required outage/recovery assertion: {marker}")
+resilience_workflow = workflow_text["test-resilience.yml"]
+if "workflow_dispatch" not in resilience_workflow:
+    raise SystemExit("FAIL: optional resilience manual reruns should remain available")
+print("[PASS] All test tiers have push, pull-request, and scheduled triggers; scale defaults and resilience assertions are present.")
 PYWORKFLOW
 
 # Regression: invalid scale workload inputs must be rejected before Docker is

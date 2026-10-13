@@ -19,7 +19,9 @@ on:
       - 'jobs/**'
       - 'scripts/**'
       - '.github/workflows/**'
-  workflow_dispatch:
+  schedule:
+    - cron: '27 2 * * *' # Daily full-stack regression (02:27 UTC).
+  workflow_dispatch: # Optional rerun; not required for automation.
 
 permissions:
   contents: read

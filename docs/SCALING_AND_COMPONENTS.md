@@ -7,10 +7,10 @@ This document describes the next test layers for Hadoop GHA Sandbox. It is a des
 | Tier | Profile | Main assertions | Recommended trigger |
 |---|---|---|---|
 | 1. Smoke | `core`, `hive`, `spark` | Service readiness, one HDFS/YARN job, Hive query, Spark/HDFS comparison | Each push/PR |
-| 2. Interoperability | `full` | Hive and Spark read the same HDFS data produced by MapReduce | Relevant PRs/pushes; manual |
-| 3. Worker topology | `distributed` | Two DataNodes, two NodeManagers, two Spark workers, live replica endpoints and executor host participation | Relevant PRs/pushes; manual |
-| 4. Small scale | `scale` | Multiple multi-block files, more MapReduce splits than files, exact record counters, multiple reducers, per-block replication, actual Spark WordCount processing on both workers | Manual, bounded parameters |
-| 5. Resilience (future) | `resilience` | Worker loss, task retry, data availability with one replica unavailable, bounded recovery/failure outcome | Manual or scheduled after stable baselines |
+| 2. Interoperability | `full` | Hive and Spark read the same HDFS data produced by MapReduce | Relevant PRs/pushes; daily schedule; optional manual rerun |
+| 3. Worker topology | `distributed` | Two DataNodes, two NodeManagers, two Spark workers, live replica endpoints and executor host participation | Relevant PRs/pushes; daily schedule; optional manual rerun |
+| 4. Small scale | `scale` | Multiple multi-block files, more MapReduce splits than files, exact record counters, multiple reducers, per-block replication, actual Spark WordCount processing on both workers | Relevant PRs/pushes; daily schedule; bounded defaults |
+| 5. Resilience | `resilience` | Read and MapReduce during a one-DataNode outage; restart the worker and verify HDFS replica recovery | Relevant PRs/pushes; daily schedule; separate from smoke CI |
 
 ## What the `scale` profile proves
 
@@ -27,6 +27,8 @@ The test asserts:
 This is a CI-sized behavioral scale test, not a throughput benchmark. All containers still share one host, one kernel, and host-level CPU, disk and network resources. Increase the fixture only after observing wall time, memory, disk and failure rates. Do not raise runner limits solely to make an assertion pass.
 
 ## Suggested next tests
+
+The initial resilience harness now covers a controlled single-DataNode outage, HDFS read availability, MapReduce success during the outage, and replication after restart. It does not prove NameNode HA, ResourceManager HA, tolerance of losing both DataNodes, real multi-host failure isolation, or task-retry behavior under a killed NodeManager. Those should be separate tests with their own explicit assertions.
 
 ### 1. HDFS operational semantics
 
@@ -74,13 +76,13 @@ For each new service/component:
 4. Write a small deterministic integration fixture and assert semantic results (rows, records, block states or final application state).
 5. Ensure the harness uses `set -Eeuo pipefail`, captures useful logs and preserves original failure exit codes.
 6. Add fast, no-Docker parser/config regression tests where possible.
-7. Add a workflow that uses minimal permissions, uploads diagnostic artifacts with `if: always()`, and always cleans up. Start expensive profiles manually; automate them only after runtime and resource cost are understood.
+7. Add a workflow that uses minimal permissions, triggers automatically on relevant PR/push events and on a schedule, uploads diagnostics with `if: always()`, and always cleans up. Keep manual dispatch only as an optional rerun mechanism.
 8. Update `README.md`, this guide, and `CONTRIBUTING.md`; cite upstream component docs and the image maintainer's contract separately.
 
 ## CI trigger policy
 
 - Keep `core`, `hive`, and `spark` smoke tests on each relevant push/PR.
 - Keep `full` and `distributed` path-filtered.
-- Keep `scale` manually dispatchable until its GitHub run has passed and its runtime/cost is known.
-- Leave nightly schedules commented out until you deliberately enable them.
+- Keep `scale` automatically triggered with bounded default inputs; manual dispatch is optional for reruns.
+- Enable scheduled regression runs after setting timeouts, artifact retention, and input limits, and review runner usage periodically.
 - For scheduled tests, retain only concise reports and time-bounded diagnostics; never expose real credentials.

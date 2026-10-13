@@ -40,8 +40,9 @@ bash scripts/run-profile.sh hive
 bash scripts/run-profile.sh spark
 bash scripts/run-profile.sh full
 bash scripts/run-profile.sh distributed
-# Opt-in scale workload; bounded to at most 128,000 records.
+# Bounded scale and controlled failure/recovery profiles.
 SCALE_FILES=24 SCALE_LINES_PER_FILE=800 bash scripts/run-profile.sh scale
+bash scripts/run-profile.sh resilience
 ```
 
 `full` and `distributed` use more resources. Run them when changing overlays, shared Hadoop configuration, resource allocation, Hive configuration, Spark submission, or shared test harnesses.
@@ -54,7 +55,7 @@ SCALE_FILES=24 SCALE_LINES_PER_FILE=800 bash scripts/run-profile.sh scale
 - Do not use output directory existence alone as proof of a successful job.
 - Clean stale HDFS input/output paths before each run and remove Compose state after it, unless a documented debug mode explicitly retains failed containers.
 - Add a fast regression test for every bug that can be tested without starting the whole cluster.
-- Use bounded, deterministic fixtures for PR tests. Place intentionally disruptive or longer resilience tests in a separate manual/scheduled profile.
+- Use bounded, deterministic fixtures for PR tests. Keep disruptive tests in their own automated, scheduled profile with a controlled failure window and guaranteed cleanup.
 - Do not claim that multiple containers prove multi-host fault tolerance. State the exact behavior verified by assertions.
 
 ## Image and version changes
@@ -72,8 +73,7 @@ When changing a Hadoop, Hive, Spark, Java, Python, or PostgreSQL image:
 - Keep `permissions` least-privileged (`contents: read` unless more is required).
 - Keep diagnostics and cleanup under `if: always()` so failures remain debuggable.
 - Keep `fail-fast: false` in the profile matrix so one profile does not hide the results of others.
-- Keep nightly distributed CI disabled until a manual distributed run has passed and resource use is understood. The optional `schedule` snippet is commented in `.github/workflows/test-distributed.yml`.
-- Keep `.github/workflows/test-scale.yml` manual-only by default. Its inputs are bounded and its test sets a small HDFS block size to create multi-block, multi-split data without unbounded CI loads.
+- All test tiers must have automatic pull-request/push triggers and a scheduled regression cadence; `workflow_dispatch` may remain as an optional rerun path. The scale defaults are bounded and its tiny HDFS block-size setting is isolated to the synthetic test overlay. The resilience workflow intentionally stops DataNode 2 only inside an ephemeral Compose project, then restarts it and checks replica recovery.
 - Make expensive profiles path-filtered where possible, but never suppress a genuine test failure with `continue-on-error`.
 - Do not expose service web UIs or ports to an untrusted network.
 
@@ -82,8 +82,8 @@ When changing a Hadoop, Hive, Spark, Java, Python, or PostgreSQL image:
 - [ ] The change and its scope are described, with the affected profiles listed.
 - [ ] Shell syntax and `scripts/test-readiness-parsers.sh` pass.
 - [ ] Python syntax passes if `jobs/` changed.
-- [ ] All affected Compose configurations validate, including `docker-compose.scale.yml` if block-size/workload settings changed.
-- [ ] The scale workload verifies multiple HDFS blocks/splits, expected MapReduce record counters/reducer launches, live replica locations, and actual Spark input-worker participation when relevant.
+- [ ] All affected Compose configurations validate, including `docker-compose.scale.yml` and the distributed overlay used by the resilience workflow.
+- [ ] The scale workload verifies multiple HDFS blocks/splits, expected MapReduce record counters/reducer launches, live replica locations, and actual Spark input-worker participation when relevant. The resilience workload verifies a read and MapReduce job during one DataNode outage, then confirms recovery and expected replication.
 - [ ] Relevant GitHub Actions runs pass, or the PR clearly explains which runtime check could not be performed and why.
 - [ ] Logs/diagnostics do not contain secrets.
 - [ ] README or relevant comments describe new configuration, profiles, limitations, and troubleshooting.

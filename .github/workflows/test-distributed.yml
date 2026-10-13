@@ -19,12 +19,9 @@ on:
       - 'jobs/**'
       - 'scripts/**'
       - '.github/workflows/**'
-  workflow_dispatch:
-
-  # Nightly is intentionally DISABLED for now. To enable a daily run later,
-  # uncomment this schedule block. GitHub schedule times are in UTC.
-  # schedule:
-  #   - cron: '37 2 * * *'  # 08:07 Asia/Kolkata
+  schedule:
+    - cron: '37 2 * * *' # Daily distributed-topology regression (02:37 UTC).
+  workflow_dispatch: # Optional rerun; not required for automation.
 
 permissions:
   contents: read

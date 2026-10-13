@@ -1,0 +1,75 @@
+name: DataNode outage and recovery test
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.env'
+      - 'docker-compose*.yml'
+      - 'hive/**'
+      - 'jobs/**'
+      - 'scripts/**'
+      - '.github/workflows/**'
+  push:
+    branches: [main]
+    paths:
+      - '.env'
+      - 'docker-compose*.yml'
+      - 'hive/**'
+      - 'jobs/**'
+      - 'scripts/**'
+      - '.github/workflows/**'
+  schedule:
+    - cron: '53 2 * * *' # Daily regression; scheduled events use the default branch.
+  workflow_dispatch: # Optional manual reruns; automation does not depend on this event.
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hadoop-resilience-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  resilience:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      COMPOSE_FILE: docker-compose.yml:docker-compose.spark.yml:docker-compose.distributed.yml
+      MAX_WAIT_SECONDS: "240"
+      READY_TIMEOUT: "360"
+      STARTUP_TIMEOUT: "450"
+      EXPECTED_DATANODES: "2"
+      EXPECTED_NODEMANAGERS: "2"
+      EXPECTED_SPARK_WORKERS: "2"
+      EXPECTED_REPLICATION: "2"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run static and regression checks
+        run: bash scripts/test-readiness-parsers.sh
+
+      - name: Validate distributed Compose configuration
+        run: docker compose config --quiet
+
+      - name: Record runner resources
+        run: |
+          docker --version
+          docker compose version
+          docker info --format 'Docker server: {{.ServerVersion}}; CPUs: {{.NCPU}}; memory bytes: {{.MemTotal}}'
+
+      - name: Run DataNode outage and recovery profile
+        run: |
+          set -Eeuo pipefail
+          mkdir -p artifacts
+          bash scripts/run-profile.sh resilience 2>&1 | tee artifacts/run-resilience-profile.log
+
+      - name: Upload resilience diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostics-resilience-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 14

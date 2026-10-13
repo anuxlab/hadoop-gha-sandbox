@@ -7,7 +7,7 @@ cd "$ROOT"
 
 profile="${1:-}"
 if [[ -z "$profile" ]]; then
-  echo "Usage: $0 {core|hive|spark|full|distributed|scale}" >&2
+  echo "Usage: $0 {core|hive|spark|full|distributed|scale|resilience}" >&2
   exit 2
 fi
 
@@ -40,7 +40,7 @@ case "$profile" in
     export EXPECTED_SPARK_WORKERS="${EXPECTED_SPARK_WORKERS:-1}"
     export EXPECTED_REPLICATION="${EXPECTED_REPLICATION:-1}"
     ;;
-  distributed)
+  distributed|resilience)
     export COMPOSE_FILE='docker-compose.yml:docker-compose.spark.yml:docker-compose.distributed.yml'
     export EXPECTED_DATANODES="${EXPECTED_DATANODES:-2}"
     export EXPECTED_NODEMANAGERS="${EXPECTED_NODEMANAGERS:-2}"
@@ -56,7 +56,7 @@ case "$profile" in
     export SPARK_TOTAL_CORES="${SPARK_TOTAL_CORES:-2}"
     ;;
   *)
-    echo "Unknown profile '$profile'. Use core, hive, spark, full, distributed, or scale." >&2
+    echo "Unknown profile '$profile'. Use core, hive, spark, full, distributed, scale, or resilience." >&2
     exit 2
     ;;
 esac
@@ -121,6 +121,10 @@ case "$profile" in
   scale)
     log 'Running multi-file, multi-block scale workload...'
     bash scripts/run-scale-test.sh 2>&1 | tee "$artifact_dir/run-scale-test.log"
+    ;;
+  resilience)
+    log 'Running controlled DataNode outage and recovery test...'
+    bash scripts/run-resilience-test.sh 2>&1 | tee "$artifact_dir/run-resilience-test.log"
     ;;
 esac
 log "Profile '${profile}' passed."

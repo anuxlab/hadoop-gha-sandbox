@@ -1,8 +1,28 @@
 name: Scalable HDFS and compute integration test
 
-# Manual by design: this profile creates many HDFS blocks and many MapReduce
-# splits, so keep it out of every-push CI until its runtime/cost is understood.
+# This bounded workload runs automatically for relevant changes and daily.
+# The dispatch inputs remain optional overrides; CI and schedule events use safe defaults.
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.env'
+      - 'docker-compose*.yml'
+      - 'hive/**'
+      - 'jobs/**'
+      - 'scripts/**'
+      - '.github/workflows/**'
+  push:
+    branches: [main]
+    paths:
+      - '.env'
+      - 'docker-compose*.yml'
+      - 'hive/**'
+      - 'jobs/**'
+      - 'scripts/**'
+      - '.github/workflows/**'
+  schedule:
+    - cron: '47 2 * * *' # Daily bounded scale regression (02:47 UTC).
   workflow_dispatch:
     inputs:
       files:
@@ -33,9 +53,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
-      SCALE_FILES: ${{ inputs.files }}
-      SCALE_LINES_PER_FILE: ${{ inputs.lines_per_file }}
-      SCALE_REDUCERS: ${{ inputs.reducers }}
+      SCALE_FILES: ${{ github.event.inputs.files || '24' }}
+      SCALE_LINES_PER_FILE: ${{ github.event.inputs.lines_per_file || '800' }}
+      SCALE_REDUCERS: ${{ github.event.inputs.reducers || '2' }}
       MAX_WAIT_SECONDS: "240"
       READY_TIMEOUT: "360"
       STARTUP_TIMEOUT: "450"
