@@ -12,7 +12,7 @@ jobs:
     timeout-minutes: 40
     env:
       COMPOSE_FILE: docker-compose.yml:docker-compose.hive.yml:docker-compose.spark.yml
-      MAX_WAIT_SECONDS: "300"
+      MAX_WAIT_SECONDS: "180"
       READY_TIMEOUT: "360"
     steps:
       - name: Checkout
@@ -30,13 +30,19 @@ jobs:
           docker compose ps -a
 
       - name: Run MapReduce test
-        run: bash scripts/run-wordcount.sh
+        run: |
+          mkdir -p artifacts
+          bash scripts/run-wordcount.sh 2>&1 | tee artifacts/run-wordcount.log
 
       - name: Run Hive SQL test
-        run: bash scripts/run-hive-query.sh /test/output
+        run: |
+          mkdir -p artifacts
+          bash scripts/run-hive-query.sh /test/output 2>&1 | tee artifacts/run-hive-query.log
 
       - name: Run Spark and cross-engine comparison
-        run: bash scripts/run-spark-job.sh
+        run: |
+          mkdir -p artifacts
+          bash scripts/run-spark-job.sh 2>&1 | tee artifacts/run-spark-job.log
 
       - name: Collect diagnostics
         if: always()

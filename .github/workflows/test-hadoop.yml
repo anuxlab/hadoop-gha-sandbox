@@ -31,7 +31,7 @@ jobs:
             compose_file: docker-compose.yml:docker-compose.spark.yml
     env:
       COMPOSE_FILE: ${{ matrix.compose_file }}
-      MAX_WAIT_SECONDS: "300"
+      MAX_WAIT_SECONDS: "180"
       READY_TIMEOUT: "360"
 
     steps:
@@ -56,15 +56,21 @@ jobs:
           docker compose ps -a
 
       - name: Run HDFS + YARN + MapReduce test
-        run: bash scripts/run-wordcount.sh
+        run: |
+          mkdir -p artifacts
+          bash scripts/run-wordcount.sh 2>&1 | tee artifacts/run-wordcount.log
 
       - name: Run Hive SQL integration test
         if: matrix.profile == 'hive'
-        run: bash scripts/run-hive-query.sh /test/output
+        run: |
+          mkdir -p artifacts
+          bash scripts/run-hive-query.sh /test/output 2>&1 | tee artifacts/run-hive-query.log
 
       - name: Run standalone Spark integration test
         if: matrix.profile == 'spark'
-        run: bash scripts/run-spark-job.sh
+        run: |
+          mkdir -p artifacts
+          bash scripts/run-spark-job.sh 2>&1 | tee artifacts/run-spark-job.log
 
       - name: Collect diagnostics
         if: always()

@@ -81,13 +81,13 @@ The distributed test waits for two registered DataNodes and NodeManagers, sets t
 
 - The base profile is intentionally memory constrained. The full-stack and multi-worker profiles use more memory and may need a larger runner if the image JVMs exceed their budgets.
 - Hadoop, Hive and Spark images are old, pinned tags selected for this proof of concept. Validate Java/Python compatibility and image availability before upgrading; then pin tested digests if stronger supply-chain reproducibility is required.
-- `HIVE_METASTORE_PASSWORD` defaults to `hive` for the disposable test image. It is a test credential, not a production secret. Never reuse it outside this sandbox.
+- The pinned `bde2020/hive-metastore-postgresql:2.3.0` image initializes the `hive` database role with the test password `hive`; the Compose service connects to PostgreSQL as `postgres` so the image's init script can create the `metastore` database and schema. This credential is for the disposable test image only, not a production secret. Never reuse it outside this sandbox.
 - The Spark job uses a tiny fixture and collects results for concise diagnostics. Do not treat this as a benchmark or increase the fixture substantially without revisiting driver memory and collection behavior.
 - No Docker engine is required to edit the files, but actual integration success must be established by running the workflows. YAML parsing and shell syntax checks alone cannot prove that container images boot or jobs succeed.
 
 ## Failure investigation
 
-Open the failed workflow run and download its `diagnostics-*` artifact. It contains `compose-ps.txt`, `compose-logs.txt`, and the resolved Compose configuration. The most useful first checks are worker registration, effective Hadoop/YARN configuration, the application final state, and the first error in the failing service's logs.
+Open the failed workflow run and download its `diagnostics-*` artifact. It contains `compose-ps.txt`, `compose-logs.txt`, and the resolved Compose configuration. The harness logs are also retained as `run-wordcount.log`, `run-hive-query.log` and `run-spark-job.log` where applicable. The most useful first checks are worker registration, the generated `mapred-site.xml`, the YARN application final state, and the first error in the failing service's logs.
 
 ## Security
 

@@ -5,7 +5,7 @@ set -Eeuo pipefail
 NAMENODE_SERVICE="${NAMENODE_SERVICE:-namenode}"
 INPUT_DIR="${INPUT_DIR:-/test/input}"
 OUTPUT_DIR="${OUTPUT_DIR:-/test/output}"
-MAX_WAIT_SECONDS="${MAX_WAIT_SECONDS:-300}"
+MAX_WAIT_SECONDS="${MAX_WAIT_SECONDS:-180}"
 EXPECTED_DATANODES="${EXPECTED_DATANODES:-1}"
 EXPECTED_NODEMANAGERS="${EXPECTED_NODEMANAGERS:-1}"
 
@@ -20,29 +20,58 @@ if ! compose ps --services --filter status=running | grep -Fxq "$NAMENODE_SERVIC
 fi
 
 wait_for_cluster() {
-  local elapsed=0 live_dn live_nm framework
+  local elapsed=0 live_dn=0 live_nm=0 framework framework_output node_output hdfs_report
+
+  # `hadoop getconf` reads generic Hadoop configuration and may not load
+  # mapred-site.xml. Inspect the generated MapReduce config directly here;
+  # the subsequent YARN application-state assertion proves actual execution.
+  framework_output=$(compose exec -T "$NAMENODE_SERVICE" bash -lc \
+    "grep -A 1 '<name>mapreduce.framework.name</name>' /etc/hadoop/mapred-site.xml | sed -nE 's#.*<value>([^<]+)</value>.*#\\1#p'" 2>&1) || {
+      err "Unable to read mapreduce.framework.name from /etc/hadoop/mapred-site.xml."
+      printf '%s\n' "$framework_output" >&2
+      err "Check MAPRED_CONF_mapreduce_framework_name and the image's config generation."
+      return 3
+    }
+  framework=$(printf '%s\n' "$framework_output" | tr -d '\r' | tail -n 1 | xargs)
+  if [[ "$framework" != "yarn" ]]; then
+    err "Expected mapreduce.framework.name=yarn, got '${framework:-<empty>}'." 
+    printf '%s\n' "$framework_output" >&2
+    err "Refusing to wait for worker registration: this is a configuration error, not a readiness delay."
+    return 3
+  fi
+  log "Verified MapReduce execution framework: ${framework}."
+
   log "Waiting for ${EXPECTED_DATANODES} live DataNode(s) and ${EXPECTED_NODEMANAGERS} RUNNING NodeManager(s)..."
   while (( elapsed < MAX_WAIT_SECONDS )); do
-    live_dn=$(compose exec -T "$NAMENODE_SERVICE" hdfs dfsadmin -report 2>/dev/null \
-      | awk '/Live datanodes \(/ {gsub(/[^0-9]/, "", $3); print $3; exit}' || true)
-    live_nm=$(compose exec -T "$NAMENODE_SERVICE" yarn node -list -all 2>/dev/null \
-      | awk '/RUNNING/ {n++} END {print n+0}' || true)
-    framework=$(compose exec -T "$NAMENODE_SERVICE" hadoop getconf -confKey mapreduce.framework.name 2>/dev/null || true)
+    hdfs_report=$(compose exec -T "$NAMENODE_SERVICE" hdfs dfsadmin -report 2>&1 || true)
+    live_dn=$(printf '%s\n' "$hdfs_report" | sed -nE 's/.*Live datanodes \(([0-9]+)\).*/\1/p' | head -n 1)
+    live_dn="${live_dn:-0}"
+
+    node_output=$(compose exec -T "$NAMENODE_SERVICE" yarn node -list -all 2>&1 || true)
+    live_nm=$(printf '%s\n' "$node_output" | awk '/RUNNING/ && !/Node-State/ {n++} END {print n+0}')
+
     if [[ "$live_dn" =~ ^[0-9]+$ ]] && (( live_dn >= EXPECTED_DATANODES )) \
-       && [[ "$live_nm" =~ ^[0-9]+$ ]] && (( live_nm >= EXPECTED_NODEMANAGERS )) \
-       && [[ "$framework" == "yarn" ]]; then
+       && [[ "$live_nm" =~ ^[0-9]+$ ]] && (( live_nm >= EXPECTED_NODEMANAGERS )); then
       log "Cluster ready: DataNodes=${live_dn}, NodeManagers=${live_nm}, framework=${framework}."
       return 0
+    fi
+
+    if (( elapsed == 0 || elapsed % 30 == 0 )); then
+      log "Readiness probe at ${elapsed}s: DataNodes=${live_dn}/${EXPECTED_DATANODES}, NodeManagers=${live_nm}/${EXPECTED_NODEMANAGERS}."
     fi
     sleep 5
     elapsed=$((elapsed + 5))
   done
+
   err "Cluster did not become ready within ${MAX_WAIT_SECONDS}s."
+  err "Last DataNode report:"
+  printf '%s\n' "${hdfs_report:-<no output>}" >&2
+  err "Last YARN node list:"
+  printf '%s\n' "${node_output:-<no output>}" >&2
   compose ps -a || true
   compose logs --no-color --tail=100 namenode datanode resourcemanager nodemanager || true
   return 3
 }
-
 wait_for_cluster
 
 log 'Preparing HDFS paths...'

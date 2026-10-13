@@ -4,15 +4,17 @@ services:
     restart: unless-stopped
     mem_limit: 400m
     environment:
-      POSTGRES_DB: metastore
-      POSTGRES_USER: hive
-      POSTGRES_PASSWORD: ${HIVE_METASTORE_PASSWORD:-hive}
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: hive
+    # The image init script creates the `metastore` database and Hive schema.
+    # Check the schema VERSION table, not just PostgreSQL TCP readiness.
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U hive -d metastore"]
+      test: ["CMD-SHELL", "psql -U postgres -d metastore -tAc 'SELECT 1 FROM VERSION LIMIT 1' | grep -qx 1"]
       interval: 5s
       timeout: 5s
-      retries: 30
-      start_period: 15s
+      retries: 40
+      start_period: 30s
     networks: [hadoop_net]
 
   hive-server:
@@ -25,7 +27,6 @@ services:
     environment:
       CORE_CONF_fs_defaultFS: hdfs://namenode:9000
       HIVE_METASTORE_USER: hive
-      HIVE_METASTORE_PASSWORD: ${HIVE_METASTORE_PASSWORD:-hive}
     entrypoint: ["/bin/bash", "/entrypoint-custom.sh"]
     volumes:
       - ./hive/entrypoint.sh:/entrypoint-custom.sh:ro

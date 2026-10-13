@@ -30,7 +30,8 @@ cat > /etc/hadoop/core-site.xml <<'XML'
 </configuration>
 XML
 
-DB_PASSWORD="${HIVE_METASTORE_PASSWORD:-hive}"
+# The pinned bde2020 metastore image initializes the hive role with password 'hive'.
+DB_PASSWORD="hive"
 cat > /opt/hive/conf/hive-site.xml <<XML
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>

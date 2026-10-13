@@ -12,7 +12,7 @@ jobs:
     timeout-minutes: 40
     env:
       COMPOSE_FILE: docker-compose.yml:docker-compose.spark.yml:docker-compose.distributed.yml
-      MAX_WAIT_SECONDS: "360"
+      MAX_WAIT_SECONDS: "240"
       EXPECTED_DATANODES: "2"
       EXPECTED_NODEMANAGERS: "2"
       EXPECTED_SPARK_WORKERS: "2"
@@ -33,10 +33,14 @@ jobs:
           docker compose ps -a
 
       - name: Verify two DataNodes, two NodeManagers and MapReduce on YARN
-        run: bash scripts/run-wordcount.sh
+        run: |
+          mkdir -p artifacts
+          bash scripts/run-wordcount.sh 2>&1 | tee artifacts/run-wordcount.log
 
       - name: Verify two Spark workers and cross-engine results
-        run: bash scripts/run-spark-job.sh
+        run: |
+          mkdir -p artifacts
+          bash scripts/run-spark-job.sh 2>&1 | tee artifacts/run-spark-job.log
 
       - name: Collect diagnostics
         if: always()
