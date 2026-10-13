@@ -1,93 +1,73 @@
 #!/usr/bin/env bash
-#
-# run-hive-query.sh
-# Runs a HiveQL query over the WordCount output written by run-wordcount.sh.
-#
-set -euo pipefail
-
-HIVE_CONTAINER="${HIVE_CONTAINER:-hive-server}"
+# Validates HiveServer2, metastore connectivity and SQL reads over HDFS output.
+set -Eeuo pipefail
 INPUT_DIR="${1:-/test/output}"
 HDFS_URI="${HDFS_URI:-hdfs://namenode:9000}"
-READY_TIMEOUT="${READY_TIMEOUT:-300}"
-QUERY_TIMEOUT="${QUERY_TIMEOUT:-120}"
+READY_TIMEOUT="${READY_TIMEOUT:-360}"
+QUERY_TIMEOUT="${QUERY_TIMEOUT:-180}"
+log() { printf '[INFO] %s\n' "$*"; }
+err() { printf '[ERROR] %s\n' "$*" >&2; }
+compose() { docker compose "$@"; }
 
-log()  { echo -e "\033[1;34m[INFO]\033[0m  $*"; }
-err()  { echo -e "\033[1;31m[ERROR]\033[0m $*" >&2; }
+compose ps --services --filter status=running | grep -Fxq hive-server || { err 'Compose service hive-server is not running.'; exit 2; }
+compose exec -T namenode hdfs dfs -test -e "${INPUT_DIR}/_SUCCESS" || { err "MapReduce output missing at ${INPUT_DIR}; run the WordCount test first."; exit 2; }
 
-if ! docker ps --format '{{.Names}}' | grep -q "^${HIVE_CONTAINER}$"; then
-  err "Container '${HIVE_CONTAINER}' is not running."
-  exit 2
-fi
-
-# ---------------------------------------------------------------------------
-# 1. Wait for HiveServer2 to be able to ACTUALLY serve queries.
-# ---------------------------------------------------------------------------
-log "Waiting for HiveServer2 to be query-ready (timeout: ${READY_TIMEOUT}s)..."
+log "Waiting for HiveServer2 query readiness (timeout ${READY_TIMEOUT}s)..."
 elapsed=0
 ready=0
 while (( elapsed < READY_TIMEOUT )); do
-    if docker exec "${HIVE_CONTAINER}" timeout 15 beeline \
-            -u "jdbc:hive2://localhost:10000/;auth=noSasl" \
-            -n root \
-            --outputformat=tsv2 \
-            -e "SELECT 1;" </dev/null 2>/dev/null | grep -qE '^1$'; then
-        ready=1
-        break
-    fi
-    sleep 10
-    elapsed=$(( elapsed + 10 ))
+  if compose exec -T hive-server timeout 15 beeline \
+      -u 'jdbc:hive2://localhost:10000/;auth=noSasl' -n root \
+      --silent=true --showHeader=false --outputformat=tsv2 -e 'SELECT 1;' 2>/dev/null \
+      | awk '$0 ~ /^[[:space:]]*1[[:space:]]*$/ {found=1} END {exit !found}'; then
+    ready=1; break
+  fi
+  sleep 10
+  elapsed=$((elapsed + 10))
 done
-
 if (( ready == 0 )); then
-    err "HiveServer2 never became query-ready after ${READY_TIMEOUT}s."
-    err "Dumping container logs (last 100 lines):"
-    docker logs --tail=100 "${HIVE_CONTAINER}" 2>&1 | sed 's/^/    /' || true
-    exit 2
+  err 'HiveServer2 did not become query-ready.'
+  compose logs --no-color --tail=150 hive-server hive-metastore-postgresql || true
+  exit 3
 fi
-log "HiveServer2 is query-ready (after ${elapsed}s)."
 
-# ---------------------------------------------------------------------------
-# 2. Write the HiveQL. LOCATION is a fully qualified HDFS URI.
-# ---------------------------------------------------------------------------
-log "Writing HiveQL to /tmp/query.hql inside the container..."
-docker exec -i "${HIVE_CONTAINER}" bash -c "cat > /tmp/query.hql" <<EOF
+query_file=$(mktemp)
+result_file=$(mktemp)
+trap 'rm -f "$query_file" "$result_file"' EXIT
+cat > "$query_file" <<SQL
 DROP TABLE IF EXISTS wordcount;
 CREATE EXTERNAL TABLE wordcount (
   word STRING,
-  count INT
+  word_count INT
 )
-ROW FORMAT DELIMITED FIELDS TERMINATED BY '\t'
+ROW FORMAT DELIMITED FIELDS TERMINATED BY '\\t'
 STORED AS TEXTFILE
 LOCATION '${HDFS_URI}${INPUT_DIR}';
+SELECT word, word_count FROM wordcount ORDER BY word;
+SQL
+compose exec -T hive-server bash -c 'cat > /tmp/ci-wordcount.hql' < "$query_file"
 
-SELECT word, count FROM wordcount LIMIT 20;
-EOF
-
-log "Query file contents:"
-docker exec "${HIVE_CONTAINER}" cat /tmp/query.hql | sed 's/^/    /'
-
-# ---------------------------------------------------------------------------
-# 3. Run the query. Use tsv2 output, stream rows, fail fast.
-# ---------------------------------------------------------------------------
-log "Running HiveQL query over ${INPUT_DIR} (timeout: ${QUERY_TIMEOUT}s)..."
-
-BEELINE_OPTS='-Djline.terminal=jline.UnsupportedTerminal -Djava.net.preferIPv4Stack=true'
-
-if ! docker exec -i \
-      -e HADOOP_CLIENT_OPTS="${BEELINE_OPTS}" \
-      "${HIVE_CONTAINER}" \
-      timeout "${QUERY_TIMEOUT}" \
-      beeline \
-        -u "jdbc:hive2://localhost:10000/;auth=noSasl" \
-        -n root \
-        --outputformat=tsv2 \
-        --hiveconf hive.server2.enable.doAs=false \
-        --hiveconf hive.fetch.task.conversion=more \
-        -f /tmp/query.hql </dev/null; then
-    err "Hive query failed or timed out."
-    err "Container logs (last 100 lines):"
-    docker logs --tail=100 "${HIVE_CONTAINER}" 2>&1 | sed 's/^/    /' || true
+log 'Creating external table and reading MapReduce output through HiveQL...'
+compose exec -T hive-server timeout "$QUERY_TIMEOUT" beeline \
+  -u 'jdbc:hive2://localhost:10000/;auth=noSasl' -n root \
+  --silent=true --showHeader=false --outputformat=tsv2 \
+  --hiveconf hive.server2.enable.doAs=false \
+  -f /tmp/ci-wordcount.hql > "$result_file" 2>&1 || {
+    err 'Hive DDL/query failed or timed out.'
+    sed -n '1,160p' "$result_file" >&2
+    compose logs --no-color --tail=150 hive-server hive-metastore-postgresql || true
     exit 4
-fi
+  }
 
-log "Hive query completed successfully."
+# Beeline versions vary in their banner output. Extract only rows with two TSV fields.
+actual=$(mktemp)
+expected=$(mktemp)
+trap 'rm -f "$query_file" "$result_file" "$actual" "$expected"' EXIT
+awk -F '\t' 'NF == 2 && $2 ~ /^[0-9]+$/ && $1 !~ /^(word|INFO|WARN|Connecting|Connected|Closing|No rows)/ {print $1 "\t" $2}' "$result_file" | LC_ALL=C sort > "$actual"
+printf 'Action\t1\nBig\t1\nData\t1\nDocker\t2\nExample\t1\nHadoop\t3\nHello\t3\nMapReduce\t2\nWordCount\t1\nYARN\t1\nand\t1\nin\t1\nwith\t1\n' | LC_ALL=C sort > "$expected"
+if ! diff -u "$expected" "$actual"; then
+  err 'Hive result rows did not match expected WordCount output.'
+  sed -n '1,160p' "$result_file" >&2
+  exit 5
+fi
+log 'Hive query returned all expected word/count pairs.'

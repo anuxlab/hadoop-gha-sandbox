@@ -1,104 +1,55 @@
-#!/bin/bash
-set -euo pipefail
+#!/usr/bin/env bash
+# Minimal HiveServer2 configuration for this disposable CI-only sandbox.
+set -Eeuo pipefail
+log() { printf '[hive-custom] %s\n' "$*"; }
 
-log() { echo "[hive-custom] $*"; }
+wait_for_tcp() {
+  local host="$1" port="$2" limit="${3:-180}" elapsed=0
+  log "Waiting for ${host}:${port}..."
+  until bash -c "</dev/tcp/${host}/${port}" 2>/dev/null; do
+    if (( elapsed >= limit )); then
+      log "ERROR: ${host}:${port} unavailable after ${limit}s."
+      return 1
+    fi
+    sleep 2
+    elapsed=$((elapsed + 2))
+  done
+  log "${host}:${port} accepts connections."
+}
 
-# Wait for dependent services (TCP probe)
-for svc in namenode:9870 datanode:9864 resourcemanager:8088 hive-metastore-postgresql:5432; do
-    host="${svc%:*}"
-    port="${svc#*:}"
-    log "Waiting for ${host}:${port}..."
-    for i in $(seq 1 90); do
-        if bash -c "</dev/tcp/${host}/${port}" 2>/dev/null; then
-            log "${host}:${port} is up."
-            break
-        fi
-        if [ "$i" -eq 90 ]; then
-            log "ERROR: ${host}:${port} never became available."
-            exit 1
-        fi
-        sleep 2
-    done
-done
+wait_for_tcp namenode 9000 180
+wait_for_tcp datanode 9864 180
+wait_for_tcp resourcemanager 8088 180
+wait_for_tcp hive-metastore-postgresql 5432 180
 
-# Write correct core-site.xml
-log "Writing /etc/hadoop/core-site.xml with fs.defaultFS=hdfs://namenode:9000"
-cat > /etc/hadoop/core-site.xml <<'EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
-<configuration>
-  <property>
-    <name>fs.defaultFS</name>
-    <value>hdfs://namenode:9000</value>
-  </property>
-</configuration>
-EOF
-
-# Write correct hive-site.xml
-log "Writing /opt/hive/conf/hive-site.xml"
-cat > /opt/hive/conf/hive-site.xml <<'EOF'
+mkdir -p /etc/hadoop /opt/hive/conf
+cat > /etc/hadoop/core-site.xml <<'XML'
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
-  <property>
-    <name>javax.jdo.option.ConnectionURL</name>
-    <value>jdbc:postgresql://hive-metastore-postgresql:5432/metastore</value>
-  </property>
-  <property>
-    <name>javax.jdo.option.ConnectionDriverName</name>
-    <value>org.postgresql.Driver</value>
-  </property>
-  <property>
-    <name>javax.jdo.option.ConnectionUserName</name>
-    <value>hive</value>
-  </property>
-  <property>
-    <name>javax.jdo.option.ConnectionPassword</name>
-    <value>hive</value>
-  </property>
-  <property>
-    <name>hive.metastore.warehouse.dir</name>
-    <value>/user/hive/warehouse</value>
-  </property>
-  <property>
-    <name>hive.metastore.schema.verification</name>
-    <value>false</value>
-  </property>
-  <property>
-    <name>datanucleus.schema.autoCreateAll</name>
-    <value>true</value>
-  </property>
-  <property>
-    <name>hive.server2.enable.doAs</name>
-    <value>false</value>
-  </property>
-  <property>
-    <name>hive.server2.authentication</name>
-    <value>NOSASL</value>
-  </property>
-  <property>
-    <name>hive.server2.thrift.port</name>
-    <value>10000</value>
-  </property>
-  <property>
-    <name>hive.server2.thrift.bind.host</name>
-    <value>0.0.0.0</value>
-  </property>
-
-  <!-- Performance fixes: prevent CREATE TABLE from hanging -->
-  <property>
-    <name>hive.stats.autogather</name>
-    <value>false</value>
-  </property>
-  <property>
-    <name>hive.stats.collect.rawdatasize</name>
-    <value>false</value>
-  </property>
-  <property>
-    <name>hive.fetch.task.conversion</name>
-    <value>more</value>
-  </property>
+  <property><name>fs.defaultFS</name><value>hdfs://namenode:9000</value></property>
 </configuration>
-EOF
+XML
 
-log "Starting HiveServer2..."
+DB_PASSWORD="${HIVE_METASTORE_PASSWORD:-hive}"
+cat > /opt/hive/conf/hive-site.xml <<XML
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+  <property><name>javax.jdo.option.ConnectionURL</name><value>jdbc:postgresql://hive-metastore-postgresql:5432/metastore</value></property>
+  <property><name>javax.jdo.option.ConnectionDriverName</name><value>org.postgresql.Driver</value></property>
+  <property><name>javax.jdo.option.ConnectionUserName</name><value>hive</value></property>
+  <property><name>javax.jdo.option.ConnectionPassword</name><value>${DB_PASSWORD}</value></property>
+  <property><name>hive.metastore.warehouse.dir</name><value>/user/hive/warehouse</value></property>
+  <property><name>hive.metastore.schema.verification</name><value>false</value></property>
+  <property><name>datanucleus.schema.autoCreateAll</name><value>true</value></property>
+  <property><name>hive.server2.enable.doAs</name><value>false</value></property>
+  <property><name>hive.server2.authentication</name><value>NOSASL</value></property>
+  <property><name>hive.server2.thrift.port</name><value>10000</value></property>
+  <property><name>hive.server2.thrift.bind.host</name><value>0.0.0.0</value></property>
+  <property><name>hive.stats.autogather</name><value>false</value></property>
+  <property><name>hive.stats.collect.rawdatasize</name><value>false</value></property>
+  <property><name>hive.fetch.task.conversion</name><value>more</value></property>
+</configuration>
+XML
+
+log 'Starting HiveServer2...'
 exec hive --service hiveserver2

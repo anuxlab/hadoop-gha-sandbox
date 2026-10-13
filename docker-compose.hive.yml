@@ -1,31 +1,32 @@
 services:
   hive-metastore-postgresql:
     image: bde2020/hive-metastore-postgresql:2.3.0
-    container_name: hive-metastore-postgresql
     restart: unless-stopped
     mem_limit: 400m
     environment:
-      - POSTGRES_DB=metastore
-      - POSTGRES_USER=hive
-      - POSTGRES_PASSWORD=hive
+      POSTGRES_DB: metastore
+      POSTGRES_USER: hive
+      POSTGRES_PASSWORD: ${HIVE_METASTORE_PASSWORD:-hive}
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U hive -d metastore || exit 1" ]
+      test: ["CMD-SHELL", "pg_isready -U hive -d metastore"]
       interval: 5s
       timeout: 5s
       retries: 30
       start_period: 15s
-    networks:
-      - hadoop_net
+    networks: [hadoop_net]
 
   hive-server:
     image: bde2020/hive:2.3.2-postgresql-metastore
-    container_name: hive-server
     restart: unless-stopped
     mem_limit: 1500m
     ports:
       - "10000:10000"
       - "10002:10002"
-    entrypoint: [ "/bin/bash", "/entrypoint-custom.sh" ]
+    environment:
+      CORE_CONF_fs_defaultFS: hdfs://namenode:9000
+      HIVE_METASTORE_USER: hive
+      HIVE_METASTORE_PASSWORD: ${HIVE_METASTORE_PASSWORD:-hive}
+    entrypoint: ["/bin/bash", "/entrypoint-custom.sh"]
     volumes:
       - ./hive/entrypoint.sh:/entrypoint-custom.sh:ro
     depends_on:
@@ -35,12 +36,13 @@ services:
         condition: service_healthy
       resourcemanager:
         condition: service_healthy
+      nodemanager:
+        condition: service_healthy
       hive-metastore-postgresql:
         condition: service_healthy
-    networks:
-      - hadoop_net
+    networks: [hadoop_net]
     healthcheck:
-      test: [ "CMD-SHELL", "bash -c '</dev/tcp/localhost/10000' || exit 1" ]
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/10000'"]
       interval: 15s
       timeout: 10s
       retries: 40

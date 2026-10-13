@@ -1,94 +1,113 @@
 services:
   namenode:
-    image: bde2020/hadoop-namenode:${HADOOP_TAG}
-    container_name: namenode
+    image: bde2020/hadoop-namenode:${HADOOP_TAG:-2.0.0-hadoop3.2.1-java8}
     restart: unless-stopped
     mem_limit: 700m
     ports:
       - "9870:9870"
       - "9000:9000"
     environment:
-      - CLUSTER_NAME=hadoop-gha-sandbox
-      - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
+      CLUSTER_NAME: hadoop-gha-sandbox
+      CORE_CONF_fs_defaultFS: hdfs://namenode:9000
+      HDFS_CONF_dfs_replication: "1"
+      YARN_CONF_yarn_resourcemanager_hostname: resourcemanager
+      MAPRED_CONF_mapreduce_framework_name: yarn
+      YARN_CONF_mapreduce_jobtracker_address: resourcemanager:8032
+      YARN_CONF_yarn_scheduler_minimum___allocation___mb: "256"
+      YARN_CONF_yarn_scheduler_maximum___allocation___mb: "512"
+      YARN_CONF_yarn_app_mapreduce_am_resource_mb: "256"
+      YARN_CONF_yarn_app_mapreduce_am_command___opts: "-Xmx192m"
+      YARN_CONF_yarn_nodemanager_resource_memory___mb: "512"
+      YARN_CONF_yarn_nodemanager_resource_cpu___vcores: "1"
+      YARN_CONF_yarn_nodemanager_vmem___check___enabled: "false"
+      MAPRED_CONF_mapreduce_map_memory_mb: "256"
+      MAPRED_CONF_mapreduce_reduce_memory_mb: "256"
+      MAPRED_CONF_mapreduce_map_java_opts: -Xmx192m
+      MAPRED_CONF_mapreduce_reduce_java_opts: -Xmx192m
     volumes:
       - namenode_data:/hadoop/dfs/name
-    networks:
-      - hadoop_net
+    networks: [hadoop_net]
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:9870 || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9870/ >/dev/null"]
       interval: 10s
       timeout: 5s
       retries: 20
       start_period: 30s
 
   datanode:
-    image: bde2020/hadoop-datanode:${HADOOP_TAG}
-    container_name: datanode
+    image: bde2020/hadoop-datanode:${HADOOP_TAG:-2.0.0-hadoop3.2.1-java8}
     restart: unless-stopped
     mem_limit: 500m
-    ports:
-      - "9864:9864"
     environment:
-      - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
-      - SERVICE_PRECONDITION=namenode:9870
+      CORE_CONF_fs_defaultFS: hdfs://namenode:9000
+      HDFS_CONF_dfs_replication: "1"
+      SERVICE_PRECONDITION: namenode:9870
     volumes:
       - datanode_data:/hadoop/dfs/data
     depends_on:
       namenode:
         condition: service_healthy
-    networks:
-      - hadoop_net
+    networks: [hadoop_net]
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:9864 || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9864/ >/dev/null"]
       interval: 10s
       timeout: 5s
       retries: 20
       start_period: 30s
 
   resourcemanager:
-    image: bde2020/hadoop-resourcemanager:${HADOOP_TAG}
-    container_name: resourcemanager
+    image: bde2020/hadoop-resourcemanager:${HADOOP_TAG:-2.0.0-hadoop3.2.1-java8}
     restart: unless-stopped
     mem_limit: 600m
     ports:
       - "8088:8088"
     environment:
-      - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
-      - YARN_CONF_yarn_resourcemanager_hostname=resourcemanager
-      - SERVICE_PRECONDITION=namenode:9000 namenode:9870 datanode:9864
+      CORE_CONF_fs_defaultFS: hdfs://namenode:9000
+      YARN_CONF_yarn_resourcemanager_hostname: resourcemanager
+      MAPRED_CONF_mapreduce_framework_name: yarn
+      YARN_CONF_yarn_scheduler_minimum___allocation___mb: "256"
+      YARN_CONF_yarn_scheduler_maximum___allocation___mb: "512"
+      YARN_CONF_yarn_app_mapreduce_am_resource_mb: "256"
+      YARN_CONF_yarn_app_mapreduce_am_command___opts: "-Xmx192m"
+      SERVICE_PRECONDITION: namenode:9000 namenode:9870 datanode:9864
     depends_on:
       namenode:
         condition: service_healthy
       datanode:
         condition: service_healthy
-    networks:
-      - hadoop_net
+    networks: [hadoop_net]
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8088 || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8088/ >/dev/null"]
       interval: 10s
       timeout: 5s
       retries: 20
       start_period: 30s
 
   nodemanager:
-    image: bde2020/hadoop-nodemanager:${HADOOP_TAG}
-    container_name: nodemanager
+    image: bde2020/hadoop-nodemanager:${HADOOP_TAG:-2.0.0-hadoop3.2.1-java8}
     restart: unless-stopped
-    mem_limit: 600m
+    mem_limit: 700m
     ports:
       - "8042:8042"
     environment:
-      - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
-      - YARN_CONF_yarn_resourcemanager_hostname=resourcemanager
-      - YARN_CONF_yarn_nodemanager_aux___services=mapreduce_shuffle
-      - SERVICE_PRECONDITION=resourcemanager:8088
+      CORE_CONF_fs_defaultFS: hdfs://namenode:9000
+      YARN_CONF_yarn_resourcemanager_hostname: resourcemanager
+      YARN_CONF_yarn_nodemanager_aux___services: mapreduce_shuffle
+      YARN_CONF_yarn_nodemanager_resource_memory___mb: "512"
+      YARN_CONF_yarn_nodemanager_resource_cpu___vcores: "1"
+      YARN_CONF_yarn_nodemanager_vmem___check___enabled: "false"
+      YARN_CONF_yarn_scheduler_minimum___allocation___mb: "256"
+      YARN_CONF_yarn_scheduler_maximum___allocation___mb: "512"
+      YARN_CONF_yarn_app_mapreduce_am_resource_mb: "256"
+      YARN_CONF_yarn_app_mapreduce_am_command___opts: "-Xmx192m"
+      MAPRED_CONF_mapreduce_framework_name: yarn
+      SERVICE_PRECONDITION: resourcemanager:8088
     depends_on:
       resourcemanager:
         condition: service_healthy
-    networks:
-      - hadoop_net
+    networks: [hadoop_net]
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8042 || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8042/ >/dev/null"]
       interval: 10s
       timeout: 5s
       retries: 20
@@ -96,7 +115,7 @@ services:
 
 networks:
   hadoop_net:
-    name: hadoop_net
+    driver: bridge
 
 volumes:
   namenode_data:

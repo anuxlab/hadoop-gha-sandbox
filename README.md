@@ -1,34 +1,94 @@
 # Hadoop GHA Sandbox
-This project will create a minimal but functional Hadoop YARN cluster using Docker Compose to test the pipelines and their limitations.
 
-A minimal Hadoop YARN cluster that runs within the resource limits using Docker Compose.
+A disposable Apache Hadoop ecosystem proof of concept for GitHub Actions. It runs real Hadoop/HDFS/YARN, MapReduce, HiveServer2 and standalone Spark processes in Docker containers and validates their data paths with small deterministic integration tests.
 
-## Purpose
+> **Scope:** this is an integration-test sandbox, not a production Hadoop deployment. Containers share one runner kernel, CPU, memory and disk. The default profile is single-worker; a separate manual profile adds multiple workers to test selected distributed behaviors.
 
-This project demonstrates how to simulate a multi-node Hadoop ecosystem in a CI environment. It starts a core cluster (HDFS, YARN, MapReduce) and runs a WordCount job to validate the setup.
+## Profiles
 
-## Components
+| Profile | Services | Main assertions | Trigger |
+|---|---|---|---|
+| `core` | NameNode, DataNode, ResourceManager, NodeManager | HDFS write/read, expected live workers, MapReduce-on-YARN WordCount output | Every push/PR |
+| `hive` | Core + PostgreSQL metastore + HiveServer2 | Beeline readiness and exact SQL results over the MapReduce HDFS output | Every push/PR |
+| `spark` | Core + standalone Spark master/worker | Worker registration, PySpark execution, `_SUCCESS`, output equals MapReduce | Every push/PR |
+| `full-stack` | Core + Hive + Spark | Runs the three integration paths together | Manual workflow dispatch |
+| `distributed` | Core + second DataNode/NodeManager + second Spark worker | Two live storage/scheduler workers, replication factor 2, MapReduce and Spark output equivalence | Manual workflow dispatch |
 
-- **HDFS**: NameNode, DataNode
-- **YARN**: ResourceManager, NodeManager
-- **MapReduce**: Example WordCount job
+The profile overlays extend the shared `docker-compose.yml`; they do not copy the base services. Compose project-scoped networks and volumes isolate separate projects/runs. Do not use a single Docker network across separate GitHub-hosted runners: matrix jobs have independent hosts and Docker daemons.
 
-## Local Usage
+## Run locally
+
+Requirements: Docker Engine with the Docker Compose v2 plugin, `curl` inside the service images, and Bash on the host. Run commands from the repository root.
+
+### Core Hadoop
 
 ```bash
-# Start the cluster
-docker-compose up -d
+docker compose -f docker-compose.yml up -d --wait --wait-timeout 400
+bash scripts/run-wordcount.sh
+docker compose -f docker-compose.yml logs --no-color
+docker compose -f docker-compose.yml down -v --remove-orphans
+```
 
-# Wait for services to be ready
-# Access NameNode UI at http://localhost:9870
-# Access ResourceManager UI at http://localhost:8088
+### Hive
 
-# Run a test job
-docker exec namenode hdfs dfs -mkdir -p /test/input
-echo "Hello Hadoop" > test.txt
-docker exec namenode hdfs dfs -put /tmp/test.txt /test/input/
-docker exec namenode hadoop jar /opt/hadoop-3.2.1/share/hadoop/mapreduce/hadoop-mapreduce-examples-3.2.1.jar wordcount /test/input /test/output
-docker exec namenode hdfs dfs -cat /test/output/part-r-00000
+```bash
+export COMPOSE_FILE=docker-compose.yml:docker-compose.hive.yml
+docker compose up -d --wait --wait-timeout 450
+bash scripts/run-wordcount.sh
+bash scripts/run-hive-query.sh /test/output
+docker compose down -v --remove-orphans
+unset COMPOSE_FILE
+```
 
-# Stop the cluster
-docker-compose down -v
+### Standalone Spark
+
+```bash
+export COMPOSE_FILE=docker-compose.yml:docker-compose.spark.yml
+docker compose up -d --wait --wait-timeout 400
+bash scripts/run-wordcount.sh
+bash scripts/run-spark-job.sh
+docker compose down -v --remove-orphans
+unset COMPOSE_FILE
+```
+
+### Multi-worker proof of concept
+
+This profile uses more memory and is intended for manual/scheduled validation rather than every pull request.
+
+```bash
+export COMPOSE_FILE=docker-compose.yml:docker-compose.spark.yml:docker-compose.distributed.yml
+export EXPECTED_DATANODES=2 EXPECTED_NODEMANAGERS=2 EXPECTED_SPARK_WORKERS=2 EXPECTED_REPLICATION=2
+
+docker compose up -d --wait --wait-timeout 450
+bash scripts/run-wordcount.sh
+bash scripts/run-spark-job.sh
+docker compose ps -a
+docker compose logs --no-color
+docker compose down -v --remove-orphans
+unset COMPOSE_FILE EXPECTED_DATANODES EXPECTED_NODEMANAGERS EXPECTED_SPARK_WORKERS EXPECTED_REPLICATION
+```
+
+The distributed test waits for two registered DataNodes and NodeManagers, sets the input file's replication factor to two and asks the Spark master for two live workers. This is stronger than merely starting two containers, but it is still a same-host simulation—not proof of independent host failure domains or high availability.
+
+## Test behavior
+
+- `scripts/run-wordcount.sh` waits for the expected HDFS/YARN workers, checks that `mapreduce.framework.name=yarn`, uploads a deterministic fixture, submits the Hadoop examples WordCount job, checks `_SUCCESS`, and compares all expected word/count pairs.
+- `scripts/run-hive-query.sh` waits for a real Beeline `SELECT 1`, creates an external Hive table over the MapReduce output and compares returned rows with expected counts.
+- `scripts/run-spark-job.sh` checks Spark master worker registration, reports Spark/Python versions, submits a PySpark job, checks `_SUCCESS` and compares Spark output to MapReduce output.
+- CI saves Compose configuration, service state and logs as artifacts, even after failure. Teardown removes containers and volumes to avoid state leaking into future runs.
+
+## Resource and compatibility notes
+
+- The base profile is intentionally memory constrained. The full-stack and multi-worker profiles use more memory and may need a larger runner if the image JVMs exceed their budgets.
+- Hadoop, Hive and Spark images are old, pinned tags selected for this proof of concept. Validate Java/Python compatibility and image availability before upgrading; then pin tested digests if stronger supply-chain reproducibility is required.
+- `HIVE_METASTORE_PASSWORD` defaults to `hive` for the disposable test image. It is a test credential, not a production secret. Never reuse it outside this sandbox.
+- The Spark job uses a tiny fixture and collects results for concise diagnostics. Do not treat this as a benchmark or increase the fixture substantially without revisiting driver memory and collection behavior.
+- No Docker engine is required to edit the files, but actual integration success must be established by running the workflows. YAML parsing and shell syntax checks alone cannot prove that container images boot or jobs succeed.
+
+## Failure investigation
+
+Open the failed workflow run and download its `diagnostics-*` artifact. It contains `compose-ps.txt`, `compose-logs.txt`, and the resolved Compose configuration. The most useful first checks are worker registration, effective Hadoop/YARN configuration, the application final state, and the first error in the failing service's logs.
+
+## Security
+
+This sandbox is designed for trusted CI code. Do not expose the unauthenticated Hadoop/Hive/Spark web interfaces to untrusted networks, do not use production data or credentials, and do not run untrusted pull-request code with secrets.

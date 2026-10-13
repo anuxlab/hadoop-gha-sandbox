@@ -1,0 +1,60 @@
+name: Distributed Hadoop proof of concept (manual)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  distributed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      COMPOSE_FILE: docker-compose.yml:docker-compose.spark.yml:docker-compose.distributed.yml
+      MAX_WAIT_SECONDS: "360"
+      EXPECTED_DATANODES: "2"
+      EXPECTED_NODEMANAGERS: "2"
+      EXPECTED_SPARK_WORKERS: "2"
+      EXPECTED_REPLICATION: "2"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate configuration
+        run: docker compose config --quiet
+
+      - name: Pull images
+        run: docker compose pull
+
+      - name: Start multi-worker topology
+        run: |
+          docker compose up -d --wait --wait-timeout 450
+          docker compose ps -a
+
+      - name: Verify two DataNodes, two NodeManagers and MapReduce on YARN
+        run: bash scripts/run-wordcount.sh
+
+      - name: Verify two Spark workers and cross-engine results
+        run: bash scripts/run-spark-job.sh
+
+      - name: Collect diagnostics
+        if: always()
+        run: |
+          mkdir -p artifacts
+          docker compose ps -a > artifacts/compose-ps.txt 2>&1 || true
+          docker compose logs --no-color > artifacts/compose-logs.txt 2>&1 || true
+          docker compose config > artifacts/compose-config.yml 2>&1 || true
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostics-distributed-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v --remove-orphans

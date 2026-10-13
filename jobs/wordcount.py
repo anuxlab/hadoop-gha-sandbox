@@ -1,10 +1,5 @@
 # -*- coding: utf-8 -*-
-"""
-PySpark WordCount that reads from HDFS and writes back to HDFS.
-
-NOTE: The bde2020/spark-* images ship Python 2.7, so this script uses
-Python 2/3-compatible syntax (no f-strings, no type hints).
-"""
+"""Small deterministic PySpark WordCount for the CI Hadoop sandbox."""
 from pyspark.sql import SparkSession
 
 INPUT_PATH = "hdfs://namenode:9000/test/input"
@@ -12,35 +7,22 @@ OUTPUT_PATH = "hdfs://namenode:9000/test/spark-output"
 
 
 def main():
-    spark = SparkSession.builder \
-        .appName("WordCount") \
-        .getOrCreate()
+    spark = SparkSession.builder.appName("HadoopGHASandboxWordCount").getOrCreate()
     sc = spark.sparkContext
     sc.setLogLevel("WARN")
-
-    rdd = sc.textFile(INPUT_PATH)
-    counts = (
-        rdd.flatMap(lambda line: line.split())
-           .map(lambda word: (word, 1))
-           .reduceByKey(lambda a, b: a + b)
-    )
-
-    print("=" * 50)
-    print("PySpark WordCount Results")
-    print("=" * 50)
-    # Python 2/3 compatible - the Alpine Spark image uses Python 2.7
-    for word, count in sorted(counts.collect(), key=lambda x: -x[1]):
-        print("{0}\t{1}".format(word, count))
-    print("=" * 50)
-
-    # Save to HDFS (remove first if it exists)
-    fs = sc._jvm.org.apache.hadoop.fs.FileSystem.get(sc._jsc.hadoopConfiguration())
-    path = sc._jvm.org.apache.hadoop.fs.Path(OUTPUT_PATH)
-    if fs.exists(path):
-        fs.delete(path, True)
-    counts.saveAsTextFile(OUTPUT_PATH)
-
-    spark.stop()
+    try:
+        counts = (
+            sc.textFile(INPUT_PATH)
+            .flatMap(lambda line: line.split())
+            .map(lambda word: (word, 1))
+            .reduceByKey(lambda left, right: left + right)
+        )
+        # Only collect for concise diagnostics; the test fixture is intentionally tiny.
+        for word, count in sorted(counts.collect()):
+            print("{0}\t{1}".format(word, count))
+        counts.saveAsTextFile(OUTPUT_PATH)
+    finally:
+        spark.stop()
 
 
 if __name__ == "__main__":
