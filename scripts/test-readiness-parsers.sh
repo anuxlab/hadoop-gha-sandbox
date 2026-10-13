@@ -313,6 +313,20 @@ for marker in (
 resilience_workflow = workflow_text["test-resilience.yml"]
 if "workflow_dispatch" not in resilience_workflow:
     raise SystemExit("FAIL: optional resilience manual reruns should remain available")
+resilience_compose = (root / "docker-compose.resilience.yml").read_text()
+resilience_env = "HDFS_CONF_dfs_namenode_heartbeat_recheck___interval: \"10000\""
+if resilience_env not in resilience_compose:
+    raise SystemExit("FAIL: resilience overlay must shorten NameNode heartbeat recheck interval to 10 seconds")
+encoded_heartbeat = "dfs_namenode_heartbeat_recheck___interval"
+decoded_heartbeat = encoded_heartbeat.replace("___", "-").replace("_", ".")
+if decoded_heartbeat != "dfs.namenode.heartbeat.recheck-interval":
+    raise SystemExit(f"FAIL: resilience heartbeat env maps to {decoded_heartbeat!r}")
+profile_runner = runner_text
+resilience_case = profile_runner.split("  resilience)", 1)[1].split(";;", 1)[0] if "  resilience)" in profile_runner else ""
+if "docker-compose.resilience.yml" not in resilience_case:
+    raise SystemExit("FAIL: resilience profile must use its isolated heartbeat overlay")
+if "docker-compose.resilience.yml" not in resilience_workflow:
+    raise SystemExit("FAIL: resilience workflow must validate the same Compose overlay as its profile runner")
 print("[PASS] All test tiers have push, pull-request, and scheduled triggers; scale defaults and resilience assertions are present.")
 PYWORKFLOW
 

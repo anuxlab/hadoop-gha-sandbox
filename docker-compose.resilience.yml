@@ -1,0 +1,9 @@
+# Resilience-test-only tuning: Hadoop 3.2.1 defaults to a long DataNode
+# expiration interval (based on dfs.namenode.heartbeat.recheck-interval).
+# A 10 s recheck interval makes a stopped test DataNode detectable within the
+# harness timeout. Keep this overlay out of regular distributed/scale profiles.
+# Compose order: base + Spark + distributed + this overlay.
+services:
+  namenode:
+    environment:
+      HDFS_CONF_dfs_namenode_heartbeat_recheck___interval: "10000"

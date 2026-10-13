@@ -40,8 +40,17 @@ case "$profile" in
     export EXPECTED_SPARK_WORKERS="${EXPECTED_SPARK_WORKERS:-1}"
     export EXPECTED_REPLICATION="${EXPECTED_REPLICATION:-1}"
     ;;
-  distributed|resilience)
+  distributed)
     export COMPOSE_FILE='docker-compose.yml:docker-compose.spark.yml:docker-compose.distributed.yml'
+    export EXPECTED_DATANODES="${EXPECTED_DATANODES:-2}"
+    export EXPECTED_NODEMANAGERS="${EXPECTED_NODEMANAGERS:-2}"
+    export EXPECTED_SPARK_WORKERS="${EXPECTED_SPARK_WORKERS:-2}"
+    export EXPECTED_REPLICATION="${EXPECTED_REPLICATION:-2}"
+    ;;
+  resilience)
+    # Only the outage test gets the shorter heartbeat timeout. Keep it isolated
+    # from ordinary distributed and scale profiles.
+    export COMPOSE_FILE='docker-compose.yml:docker-compose.spark.yml:docker-compose.distributed.yml:docker-compose.resilience.yml'
     export EXPECTED_DATANODES="${EXPECTED_DATANODES:-2}"
     export EXPECTED_NODEMANAGERS="${EXPECTED_NODEMANAGERS:-2}"
     export EXPECTED_SPARK_WORKERS="${EXPECTED_SPARK_WORKERS:-2}"

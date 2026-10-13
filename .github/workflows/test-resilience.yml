@@ -35,8 +35,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      COMPOSE_FILE: docker-compose.yml:docker-compose.spark.yml:docker-compose.distributed.yml
-      MAX_WAIT_SECONDS: "240"
+      COMPOSE_FILE: docker-compose.yml:docker-compose.spark.yml:docker-compose.distributed.yml:docker-compose.resilience.yml
+      MAX_WAIT_SECONDS: "240" # With the resilience-only 10 s recheck setting, dead-node detection should be well inside this bound.
       READY_TIMEOUT: "360"
       STARTUP_TIMEOUT: "450"
       EXPECTED_DATANODES: "2"

@@ -73,7 +73,7 @@ When changing a Hadoop, Hive, Spark, Java, Python, or PostgreSQL image:
 - Keep `permissions` least-privileged (`contents: read` unless more is required).
 - Keep diagnostics and cleanup under `if: always()` so failures remain debuggable.
 - Keep `fail-fast: false` in the profile matrix so one profile does not hide the results of others.
-- All test tiers must have automatic pull-request/push triggers and a scheduled regression cadence; `workflow_dispatch` may remain as an optional rerun path. The scale defaults are bounded and its tiny HDFS block-size setting is isolated to the synthetic test overlay. The resilience workflow intentionally stops DataNode 2 only inside an ephemeral Compose project, then restarts it and checks replica recovery.
+- All test tiers must have automatic pull-request/push triggers and a scheduled regression cadence; `workflow_dispatch` may remain as an optional rerun path. The scale defaults are bounded and its tiny HDFS block-size setting is isolated to the synthetic test overlay. The resilience workflow intentionally stops DataNode 2 only inside an ephemeral Compose project, then restarts it and checks replica recovery. Keep its 10-second heartbeat-recheck tuning isolated in `docker-compose.resilience.yml`; never include that test-only overlay in production configuration or normal distributed/scale profiles.
 - Make expensive profiles path-filtered where possible, but never suppress a genuine test failure with `continue-on-error`.
 - Do not expose service web UIs or ports to an untrusted network.
 
@@ -82,7 +82,7 @@ When changing a Hadoop, Hive, Spark, Java, Python, or PostgreSQL image:
 - [ ] The change and its scope are described, with the affected profiles listed.
 - [ ] Shell syntax and `scripts/test-readiness-parsers.sh` pass.
 - [ ] Python syntax passes if `jobs/` changed.
-- [ ] All affected Compose configurations validate, including `docker-compose.scale.yml` and the distributed overlay used by the resilience workflow.
+- [ ] All affected Compose configurations validate, including `docker-compose.scale.yml`, `docker-compose.distributed.yml`, and `docker-compose.resilience.yml`.
 - [ ] The scale workload verifies multiple HDFS blocks/splits, expected MapReduce record counters/reducer launches, live replica locations, and actual Spark input-worker participation when relevant. The resilience workload verifies a read and MapReduce job during one DataNode outage, then confirms recovery and expected replication.
 - [ ] Relevant GitHub Actions runs pass, or the PR clearly explains which runtime check could not be performed and why.
 - [ ] Logs/diagnostics do not contain secrets.

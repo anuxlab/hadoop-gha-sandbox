@@ -13,7 +13,7 @@ A small, reusable integration-test framework for validating HDFS, YARN/MapReduce
 - **Distributed:** Two DataNodes, two NodeManagers, two Spark workers; asserts live HDFS replicas and records executor hosts.
 - **Scale:** A bounded workload runs automatically on relevant pull requests and pushes and on a daily schedule. It exercises multiple HDFS blocks/splits, YARN MapReduce counters/reducers, replication on distinct DataNodes, and Spark WordCount execution on multiple workers.
 
-The uploaded diagnostics from runs `38378261082` / `38378261105` / `38378261106` establish the earlier core, Hive, standalone Spark, full-stack, and distributed baselines. The scale profile subsequently passed GitHub Actions run `38383224133`: 24 files and 19,200 records produced 48 MapReduce splits, all 48 HDFS blocks had two live replicas on distinct DataNodes, Spark WordCount used two worker hosts, and Spark/MapReduce outputs matched. The newly added resilience workflow is automated but still needs its first live Actions run.
+The uploaded diagnostics from runs `38378261082` / `38378261105` / `38378261106` establish the earlier core, Hive, standalone Spark, full-stack, and distributed baselines. The scale profile subsequently passed GitHub Actions run `38383224133`: 24 files and 19,200 records produced 48 MapReduce splits, all 48 HDFS blocks had two live replicas on distinct DataNodes, Spark WordCount used two worker hosts, and Spark/MapReduce outputs matched. The first resilience Actions run (`38387453329`) exposed a timing mismatch: Hadoop still reported the stopped DataNode as live after the harness 240-second wait. The fix isolates a 10-second NameNode heartbeat recheck setting to `docker-compose.resilience.yml`; the corrected profile still requires a subsequent live Actions pass.
 
 ## Architecture
 
@@ -57,7 +57,7 @@ All services within a selected profile share a Compose bridge network and resolv
 | `full` | Base + Hive + Spark overlays | Runs MapReduce, Hive, and Spark sequentially against one stack | Automatic on relevant code PRs/pushes to `main` and daily schedule; manual reruns optional |
 | `distributed` | Base + Spark + distributed overlay | Two DataNodes/NodeManagers/workers; replication checked against live distinct DataNode endpoints; Spark scheduling probe on distinct hosts | Automatic on relevant code PRs/pushes to `main` and daily schedule; manual reruns optional |
 | `scale` | Base + Spark + distributed + scale overlay | Bounded multi-file/multi-block input; MapReduce splits, counters and reducers; every input block replicated on distinct DataNodes; actual Spark WordCount participation on multiple hosts | Automatic on relevant code PRs/pushes to `main` and daily schedule; manual input overrides optional |
-| `resilience` | Base + Spark + distributed overlay | Stops DataNode 2; verifies HDFS read and MapReduce success with one live DataNode; restarts it and checks replica recovery | Automatic on relevant code PRs/pushes to `main` and daily schedule; manual reruns optional |
+| `resilience` | Base + Spark + distributed + resilience-only heartbeat overlay | Uses a 10-second NameNode heartbeat recheck for this test only; stops DataNode 2; verifies HDFS read and MapReduce success with one live DataNode; restarts it and checks replica recovery | Automatic on relevant code PRs/pushes to `main` and daily schedule; manual reruns optional |
 
 `test-hadoop.yml` runs the core/Hive/Spark matrix automatically on pull requests, pushes to `main`, and daily. Full-stack, distributed, scale, and resilience workflows are path-filtered for relevant code/configuration changes and also have daily scheduled runs. `workflow_dispatch` remains available as an optional rerun mechanism, not as a prerequisite for testing. Automated scale runs use 24 files × 800 lines, two reducers, two DataNodes and two Spark workers; optional manual inputs remain bounded and validated before containers start.
 
@@ -77,7 +77,7 @@ These are community-maintained container images, not Apache-distributed producti
 
 ## Validation evidence
 
-See [Validation Evidence and Remaining Gates](docs/VALIDATION.md) for uploaded CI run IDs, exact assertions visible in their logs, and the remaining live-CI gate for the newly added resilience profile.
+See [Validation Evidence and Remaining Gates](docs/VALIDATION.md) for uploaded CI run IDs, exact assertions visible in their logs, the resilience timeout diagnosis, and the remaining live-CI gate.
 
 ## Scaling and adding components
 
