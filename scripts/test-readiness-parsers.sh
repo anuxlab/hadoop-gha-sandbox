@@ -68,6 +68,36 @@ worker_count="$(python3 -c 'import json,sys; d=json.load(sys.stdin); print(sum(1
 }
 printf '[PASS] Spark parser counts ALIVE workers and ignores DEAD workers.\n'
 
+# Regression: Spark output must use the same word<TAB>count format as Hadoop
+# TextOutputFormat; writing a tuple RDD directly produces "('word', count)".
+python3 - "$ROOT/jobs/wordcount.py" <<'SPARKTEST'
+import ast
+import pathlib
+import sys
+
+job_path = pathlib.Path(sys.argv[1])
+source = job_path.read_text()
+tree = ast.parse(source, filename=str(job_path))
+formatter = next(
+    (node for node in tree.body if isinstance(node, ast.FunctionDef)
+     and node.name == "format_count_pair"),
+    None,
+)
+if formatter is None:
+    raise SystemExit("FAIL: Spark job has no format_count_pair serializer")
+module = ast.Module(body=[formatter], type_ignores=[])
+namespace = {}
+exec(compile(ast.fix_missing_locations(module), str(job_path), "exec"), namespace)
+actual = namespace["format_count_pair"](("Hadoop", 3))
+if actual != "Hadoop\t3":
+    raise SystemExit("FAIL: Spark serializer returned {!r}, expected tab-separated output".format(actual))
+if "counts.map(format_count_pair).saveAsTextFile(OUTPUT_PATH)" not in source:
+    raise SystemExit("FAIL: Spark save path does not apply the output serializer")
+if "counts.saveAsTextFile(OUTPUT_PATH)" in source:
+    raise SystemExit("FAIL: Spark still serializes raw Python tuples")
+print("[PASS] Spark output uses normalized tab-separated word/count rows.")
+SPARKTEST
+
 if grep -Fq "SELECT 1 FROM VERSION" "$ROOT/docker-compose.hive.yml"; then
   printf 'FAIL: PostgreSQL healthcheck must not wait for Hive VERSION schema.\n' >&2
   exit 1
