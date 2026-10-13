@@ -51,6 +51,9 @@ services:
       YARN_CONF_yarn_app_mapreduce_am_resource_mb: "256"
       YARN_CONF_yarn_app_mapreduce_am_command___opts: "-Xmx192m"
       MAPRED_CONF_mapreduce_framework_name: yarn
+      MAPRED_CONF_yarn_app_mapreduce_am_env: "HADOOP_MAPRED_HOME=/opt/hadoop-3.2.1/"
+      MAPRED_CONF_mapreduce_map_env: "HADOOP_MAPRED_HOME=/opt/hadoop-3.2.1/"
+      MAPRED_CONF_mapreduce_reduce_env: "HADOOP_MAPRED_HOME=/opt/hadoop-3.2.1/"
       SERVICE_PRECONDITION: resourcemanager:8088
     depends_on:
       resourcemanager:

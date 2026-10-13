@@ -60,18 +60,21 @@ jobs:
 
       - name: Run HDFS + YARN + MapReduce test
         run: |
+          set -Eeuo pipefail
           mkdir -p artifacts
           bash scripts/run-wordcount.sh 2>&1 | tee artifacts/run-wordcount.log
 
       - name: Run Hive SQL integration test
         if: matrix.profile == 'hive'
         run: |
+          set -Eeuo pipefail
           mkdir -p artifacts
           bash scripts/run-hive-query.sh /test/output 2>&1 | tee artifacts/run-hive-query.log
 
       - name: Run standalone Spark integration test
         if: matrix.profile == 'spark'
         run: |
+          set -Eeuo pipefail
           mkdir -p artifacts
           bash scripts/run-spark-job.sh 2>&1 | tee artifacts/run-spark-job.log
 

@@ -72,11 +72,11 @@ The distributed test waits for two registered DataNodes and NodeManagers, sets t
 
 ## Test behavior
 
-- `scripts/test-readiness-parsers.sh` runs fast regression tests for the MapReduce XML parser, Spark's `ALIVE` worker-state field, and the Hive/PostgreSQL healthcheck dependency.
-- `scripts/run-wordcount.sh` waits for the expected HDFS/YARN workers, checks `mapreduce.framework.name=yarn` using only that XML property (without capturing the next property's value), uploads a deterministic fixture, submits the Hadoop examples WordCount job, checks `_SUCCESS`, and compares all expected word/count pairs.
-- `scripts/run-hive-query.sh` waits for a real Beeline `SELECT 1`, creates an external Hive table over the MapReduce output and compares returned rows with expected counts. PostgreSQL health means SQL/database availability, not existence of Hive's `VERSION` table; the image initializes the Hive schema during PostgreSQL bootstrap, so HiveServer2 must not attempt to recreate existing objects as the non-owner `hive` role.
+- `scripts/test-readiness-parsers.sh` runs fast regression tests for the MapReduce XML parser, required `HADOOP_MAPRED_HOME` launch properties, the Spark `ALIVE` worker-state field, the Hive/PostgreSQL healthcheck dependency, and `pipefail` in CI test steps.
+- `scripts/run-wordcount.sh` waits for the expected HDFS/YARN workers, checks `mapreduce.framework.name=yarn`, verifies the generated `mapred-site.xml` injects `HADOOP_MAPRED_HOME=/opt/hadoop-3.2.1/` into the ApplicationMaster/map/reduce environments, checks the ApplicationMaster JAR exists in the client and worker images, uploads a deterministic fixture, submits WordCount through YARN, checks application state and `_SUCCESS`, and compares expected word/count pairs. The path matches the pinned `bde2020/*:2.0.0-hadoop3.2.1-java8` images; update it when changing Hadoop image versions.
+- `scripts/run-hive-query.sh` waits for a real Beeline `SELECT 1`, creates an external Hive table over the MapReduce output and compares returned rows with expected counts. PostgreSQL health means SQL/database availability, not existence of Hive's `VERSION` table; the image initializes the Hive schema during PostgreSQL bootstrap, so HiveServer2 must not attempt to recreate existing objects as the non-owner `hive` role. The custom entrypoint writes Hadoop/Hive XML to temporary files and atomically renames them into place.
 - `scripts/run-spark-job.sh` checks Spark master worker registration using the `state=ALIVE` field returned by the Spark 3.0 REST API, reports Spark/Python versions, submits a PySpark job, checks `_SUCCESS` and compares Spark output to MapReduce output.
-- CI saves Compose configuration, service state and logs as artifacts, even after failure. Teardown removes containers and volumes to avoid state leaking into future runs.
+- CI saves Compose configuration, service state and logs as artifacts, even after failure. Each test step enables `set -Eeuo pipefail` so `tee` cannot mask a failed test script. Teardown removes containers and volumes to avoid state leaking into future runs.
 
 ## Resource and compatibility notes
 
@@ -86,9 +86,16 @@ The distributed test waits for two registered DataNodes and NodeManagers, sets t
 - The Spark job uses a tiny fixture and collects results for concise diagnostics. Do not treat this as a benchmark or increase the fixture substantially without revisiting driver memory and collection behavior.
 - No Docker engine is required to edit the files, but actual integration success must be established by running the workflows. YAML parsing and shell syntax checks alone cannot prove that container images boot or jobs succeed.
 
+
+### MapReduce ApplicationMaster classpath
+
+The pinned Hadoop 3.2.1 image requires `HADOOP_MAPRED_HOME` to be present in the YARN ApplicationMaster, mapper and reducer environments. The Compose `MAPRED_CONF_..._env` properties set those values to `/opt/hadoop-3.2.1/`, and the harness verifies both the effective XML properties and the ApplicationMaster JAR before submitting a job. If you change the Hadoop image tag, update this path and the preflight together.
+
+CI run steps that pipe scripts through `tee` use `set -Eeuo pipefail`; otherwise Bash can return `tee`'s success status and incorrectly proceed to Hive/Spark after a failed MapReduce prerequisite.
+
 ## Failure investigation
 
-Open the failed workflow run and download its `diagnostics-*` artifact. It contains `compose-ps.txt`, `compose-logs.txt`, and the resolved Compose configuration. The harness logs are also retained as `run-wordcount.log`, `run-hive-query.log` and `run-spark-job.log` where applicable. The most useful first checks are worker registration, the generated `mapred-site.xml`, the YARN application final state, and the first error in the failing service's logs.
+Open the failed workflow run and download its `diagnostics-*` artifact. It contains `compose-ps.txt`, `compose-logs.txt`, and the resolved Compose configuration. The harness logs are also retained as `run-wordcount.log`, `run-hive-query.log` and `run-spark-job.log` where applicable. The most useful first checks are worker registration, the generated `mapred-site.xml`, the `HADOOP_MAPRED_HOME` property values, the presence of `hadoop-mapreduce-client-app-3.2.1.jar` on each NodeManager, the YARN application final state, and the first error in the failing service's logs. If the ApplicationMaster reports `Could not find or load main class org.apache.hadoop.mapreduce.v2.app.MRAppMaster`, check these environment properties before tuning timeouts.
 
 ## Security
 

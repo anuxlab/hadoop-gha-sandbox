@@ -34,16 +34,19 @@ jobs:
 
       - name: Run MapReduce test
         run: |
+          set -Eeuo pipefail
           mkdir -p artifacts
           bash scripts/run-wordcount.sh 2>&1 | tee artifacts/run-wordcount.log
 
       - name: Run Hive SQL test
         run: |
+          set -Eeuo pipefail
           mkdir -p artifacts
           bash scripts/run-hive-query.sh /test/output 2>&1 | tee artifacts/run-hive-query.log
 
       - name: Run Spark and cross-engine comparison
         run: |
+          set -Eeuo pipefail
           mkdir -p artifacts
           bash scripts/run-spark-job.sh 2>&1 | tee artifacts/run-spark-job.log
 

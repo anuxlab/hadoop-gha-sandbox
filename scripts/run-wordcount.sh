@@ -29,7 +29,7 @@ wait_for_cluster() {
   # `mesg: ttyname failed` on non-interactive Docker execs, contaminating stdout.
   # A non-login POSIX shell keeps the captured value machine-readable.
   framework_output=$(compose exec -T "$NAMENODE_SERVICE" sh -c \
-    "sed -n '/<name>mapreduce.framework.name<\\/name>/s#.*<value>\\([^<]*\\)</value>.*#\\1#p' /etc/hadoop/mapred-site.xml" 2>/dev/null) || {
+    "sed -n '/<name>mapreduce.framework.name<\/name>/s#.*<value>\\([^<]*\\)</value>.*#\\1#p' /etc/hadoop/mapred-site.xml" 2>/dev/null) || {
       err "Unable to read mapreduce.framework.name from /etc/hadoop/mapred-site.xml."
       printf '%s\n' "$framework_output" >&2
       err "Check MAPRED_CONF_mapreduce_framework_name and the image's config generation."
@@ -37,12 +37,68 @@ wait_for_cluster() {
     }
   framework=$(printf '%s\n' "$framework_output" | tr -d '\r' | sed '/^[[:space:]]*$/d' | head -n 1 | xargs)
   if [[ "$framework" != "yarn" ]]; then
-    err "Expected mapreduce.framework.name=yarn, got '${framework:-<empty>}'." 
+    err "Expected mapreduce.framework.name=yarn, got '${framework:-<empty>}'."
     printf '%s\n' "$framework_output" >&2
     err "Refusing to wait for worker registration: this is a configuration error, not a readiness delay."
     return 3
   fi
   log "Verified MapReduce execution framework: ${framework}."
+
+  # Hadoop 3.2.x launches the MapReduce ApplicationMaster and task JVMs in
+  # YARN containers. They require HADOOP_MAPRED_HOME to construct the
+  # MapReduce classpath; the stock image does not reliably inject it.
+  local mapred_home="/opt/hadoop-3.2.1/"
+  local service conf_xml property active_services
+  active_services=$(compose ps --services --filter status=running)
+
+  # Check the submitter and every active NodeManager. In particular, the
+  # submitter's mapred-site.xml is shipped as part of the YARN application
+  # configuration, while each NodeManager image must contain the referenced
+  # ApplicationMaster JAR at the same path.
+  for service in "$NAMENODE_SERVICE" nodemanager nodemanager2; do
+    if ! grep -Fxq "$service" <<< "$active_services"; then
+      if [[ "$service" == "$NAMENODE_SERVICE" ]]; then
+        err "Required client service ${service} is not running."
+        return 3
+      fi
+      continue
+    fi
+
+    conf_xml=$(compose exec -T "$service" cat /etc/hadoop/mapred-site.xml) || {
+      err "Unable to read /etc/hadoop/mapred-site.xml from ${service}."
+      return 3
+    }
+
+    for property in yarn.app.mapreduce.am.env mapreduce.map.env mapreduce.reduce.env; do
+      if ! printf '%s\n' "$conf_xml" | awk -v want="$property" -v expected="HADOOP_MAPRED_HOME=${mapred_home}" '
+        /<property>/ { name=""; value="" }
+        /<name>/ {
+          x=$0; sub(/^.*<name>/, "", x); sub(/<\/name>.*$/, "", x); name=x
+        }
+        /<value>/ {
+          x=$0; sub(/^.*<value>/, "", x); sub(/<\/value>.*$/, "", x); value=x
+        }
+        /<\/property>/ && name == want && value == expected { found=1 }
+        END { exit !found }
+      '; then
+        err "Missing or incorrect ${property}=HADOOP_MAPRED_HOME=${mapred_home} in ${service}/etc/hadoop/mapred-site.xml."
+        err "Check MAPRED_CONF_${property//./_} for ${service}."
+        printf '%s\n' "$conf_xml" >&2
+        return 3
+      fi
+    done
+
+    if ! compose exec -T "$service" sh -ec '
+      home="${HADOOP_HOME:-/opt/hadoop-3.2.1}"
+      version="${HADOOP_VERSION:-3.2.1}"
+      jar="${home}/share/hadoop/mapreduce/hadoop-mapreduce-client-app-${version}.jar"
+      test -r "$jar" || { echo "Missing MapReduce ApplicationMaster JAR: $jar" >&2; exit 1; }
+    '; then
+      err "MapReduce ApplicationMaster JAR preflight failed in ${service}."
+      return 3
+    fi
+    log "Verified MapReduce launch environment and ApplicationMaster JAR in ${service}."
+  done
 
   log "Waiting for ${EXPECTED_DATANODES} live DataNode(s) and ${EXPECTED_NODEMANAGERS} RUNNING NodeManager(s)..."
   while (( elapsed < MAX_WAIT_SECONDS )); do

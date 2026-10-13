@@ -37,11 +37,13 @@ jobs:
 
       - name: Verify two DataNodes, two NodeManagers and MapReduce on YARN
         run: |
+          set -Eeuo pipefail
           mkdir -p artifacts
           bash scripts/run-wordcount.sh 2>&1 | tee artifacts/run-wordcount.log
 
       - name: Verify two Spark workers and cross-engine results
         run: |
+          set -Eeuo pipefail
           mkdir -p artifacts
           bash scripts/run-spark-job.sh 2>&1 | tee artifacts/run-spark-job.log
 
