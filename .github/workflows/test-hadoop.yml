@@ -33,6 +33,7 @@ jobs:
       COMPOSE_FILE: ${{ matrix.compose_file }}
       MAX_WAIT_SECONDS: "180"
       READY_TIMEOUT: "360"
+      EXPECTED_REPLICATION: "1"
 
     steps:
       - name: Checkout

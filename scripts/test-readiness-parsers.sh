@@ -166,3 +166,76 @@ for rel in workflows:
             raise SystemExit(f"FAIL: {rel}:{i+1} pipes test output to tee without pipefail")
 print("[PASS] All workflow test pipelines preserve script failures through tee.")
 PY
+
+
+# Regression: distributed Spark must request enough cores and assert the
+# executor host identities actually used by tasks, not just registered workers.
+grep -Fq 'spark.gha.expectedWorkers' "$ROOT/scripts/run-spark-job.sh" || {
+  printf 'FAIL: Spark submission must pass its expected worker count.\n' >&2
+  exit 1
+}
+grep -Fq 'spark.cores.max=${SPARK_TOTAL_CORES:-${EXPECTED_SPARK_WORKERS:-1}}' "$ROOT/scripts/run-spark-job.sh" || {
+  printf 'FAIL: Spark core cap must scale with the requested worker count.\n' >&2
+  exit 1
+}
+grep -Fq 'WORKER_HOSTS_PATH' "$ROOT/scripts/run-spark-job.sh" || {
+  printf 'FAIL: Spark harness must validate executor worker-host output.\n' >&2
+  exit 1
+}
+grep -Fq 'host_for_partition' "$ROOT/jobs/wordcount.py" || {
+  printf 'FAIL: Spark job must include an executor-host participation probe.\n' >&2
+  exit 1
+}
+printf '[PASS] Distributed Spark requests and verifies actual worker participation.\n'
+
+# Regression: requested HDFS replication must be checked against live replicas
+# and their reported DataNode locations, not only dfs -stat %r.
+grep -Fq 'hdfs fsck "$INPUT_DIR/wordcount-input.txt" -files -blocks -locations' "$ROOT/scripts/run-wordcount.sh" || {
+  printf 'FAIL: replication test must inspect HDFS block locations with fsck.\n' >&2
+  exit 1
+}
+grep -Fq 'assert-hdfs-replication.py' "$ROOT/scripts/run-wordcount.sh" || {
+  printf 'FAIL: replication test must use the tested fsck parser.\n' >&2
+  exit 1
+}
+fsck_valid_sample="$(printf '%s\n' \
+  '/test/wordcount-input.txt 100 bytes, replicated: replication=2, 1 block(s): OK' \
+  '0. BP-1:blk_1 len=100 Live_repl=2 [DatanodeInfoWithStorage[172.18.0.2:9866,DS-a,DISK], DatanodeInfoWithStorage[172.18.0.3:9866,DS-b,DISK]]' \
+  'Status: HEALTHY')"
+printf '%s\n' "$fsck_valid_sample" | python3 "$ROOT/scripts/assert-hdfs-replication.py" 2 >/dev/null || {
+  printf 'FAIL: valid two-DataNode fsck sample should pass.\n' >&2
+  exit 1
+}
+fsck_invalid_sample="$(printf '%s\n' \
+  '/test/wordcount-input.txt 100 bytes, replicated: replication=2, 1 block(s): OK' \
+  '0. BP-1:blk_1 len=100 Live_repl=2 [DatanodeInfoWithStorage[172.18.0.2:9866,DS-a,DISK], DatanodeInfoWithStorage[172.18.0.2:9866,DS-b,DISK]]' \
+  'Status: HEALTHY')"
+if printf '%s\n' "$fsck_invalid_sample" | python3 "$ROOT/scripts/assert-hdfs-replication.py" 2 >/dev/null 2>&1; then
+  printf 'FAIL: two replicas on a single DataNode endpoint must fail.\n' >&2
+  exit 1
+fi
+printf '[PASS] HDFS fsck parser verifies live replicas on distinct DataNodes.\n'
+
+# Workflow triggers: full stack auto-runs on relevant PRs/pushes; distributed
+# runs on relevant PRs/pushes and manual dispatch. Nightly schedule stays off.
+python3 - "$ROOT" <<'PYWORKFLOW'
+import pathlib, re, sys
+root = pathlib.Path(sys.argv[1])
+full = (root / ".github/workflows/test-full-stack.yml").read_text()
+distributed = (root / ".github/workflows/test-distributed.yml").read_text()
+for name, text in (("full-stack", full), ("distributed", distributed)):
+    for event in ("pull_request", "push", "workflow_dispatch"):
+        if not re.search(r"(?m)^  " + re.escape(event) + r":", text):
+            raise SystemExit(f"FAIL: {name} workflow is missing {event} trigger")
+if re.search(r"(?m)^  schedule:", distributed):
+    raise SystemExit("FAIL: nightly schedule must remain disabled until explicitly enabled")
+if not re.search(r"(?m)^  # schedule:", distributed):
+    raise SystemExit("FAIL: distributed workflow should document the optional nightly schedule")
+runner = (root / "scripts/run-profile.sh")
+if not runner.exists():
+    raise SystemExit("FAIL: local reusable profile runner is missing")
+for profile in ("core", "hive", "spark", "full", "distributed"):
+    if profile not in runner.read_text():
+        raise SystemExit(f"FAIL: local profile runner is missing profile {profile}")
+print("[PASS] Automatic CI triggers, optional nightly behavior and local profile runner are configured.")
+PYWORKFLOW

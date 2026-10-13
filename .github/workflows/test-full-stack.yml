@@ -1,10 +1,32 @@
-name: Full-stack integration test (manual)
+name: Full-stack integration test
 
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.env'
+      - 'docker-compose*.yml'
+      - 'hive/**'
+      - 'jobs/**'
+      - 'scripts/**'
+      - '.github/workflows/**'
+  push:
+    branches: [main]
+    paths:
+      - '.env'
+      - 'docker-compose*.yml'
+      - 'hive/**'
+      - 'jobs/**'
+      - 'scripts/**'
+      - '.github/workflows/**'
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: hadoop-full-stack-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   full:
@@ -14,15 +36,25 @@ jobs:
       COMPOSE_FILE: docker-compose.yml:docker-compose.hive.yml:docker-compose.spark.yml
       MAX_WAIT_SECONDS: "180"
       READY_TIMEOUT: "360"
+      EXPECTED_DATANODES: "1"
+      EXPECTED_NODEMANAGERS: "1"
+      EXPECTED_SPARK_WORKERS: "1"
+      EXPECTED_REPLICATION: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Test readiness parser regressions
+      - name: Test readiness and regression checks
         run: bash scripts/test-readiness-parsers.sh
 
-      - name: Validate configuration
+      - name: Validate Compose configuration
         run: docker compose config --quiet
+
+      - name: Record runner resources
+        run: |
+          docker --version
+          docker compose version
+          docker info --format 'Docker server: {{.ServerVersion}}; CPUs: {{.NCPU}}; memory bytes: {{.MemTotal}}'
 
       - name: Pull images
         run: docker compose pull
@@ -32,13 +64,13 @@ jobs:
           docker compose up -d --wait --wait-timeout 450
           docker compose ps -a
 
-      - name: Run MapReduce test
+      - name: Run MapReduce on YARN
         run: |
           set -Eeuo pipefail
           mkdir -p artifacts
           bash scripts/run-wordcount.sh 2>&1 | tee artifacts/run-wordcount.log
 
-      - name: Run Hive SQL test
+      - name: Run Hive SQL integration test
         run: |
           set -Eeuo pipefail
           mkdir -p artifacts
@@ -62,7 +94,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: diagnostics-full-${{ github.run_id }}
+          name: diagnostics-full-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/
           if-no-files-found: warn
           retention-days: 7

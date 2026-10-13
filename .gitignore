@@ -1,0 +1,12 @@
+# Locally retained CI/test artifacts
+artifacts/
+*.log
+
+# Python test/compile artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local overrides should not be committed
+.env.local
+.env.override

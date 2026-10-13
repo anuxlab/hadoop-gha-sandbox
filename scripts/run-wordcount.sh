@@ -2,6 +2,7 @@
 # End-to-end HDFS + YARN + MapReduce smoke test.
 set -Eeuo pipefail
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 NAMENODE_SERVICE="${NAMENODE_SERVICE:-namenode}"
 INPUT_DIR="${INPUT_DIR:-/test/input}"
 OUTPUT_DIR="${OUTPUT_DIR:-/test/output}"
@@ -156,7 +157,21 @@ if [[ -n "${EXPECTED_REPLICATION:-}" ]]; then
   log "Setting test-file replication to ${EXPECTED_REPLICATION}..."
   compose exec -T "$NAMENODE_SERVICE" hdfs dfs -setrep -w "$EXPECTED_REPLICATION" "$INPUT_DIR/wordcount-input.txt"
   actual_replication=$(compose exec -T "$NAMENODE_SERVICE" hdfs dfs -stat '%r' "$INPUT_DIR/wordcount-input.txt" | tr -d '\r')
-  [[ "$actual_replication" == "$EXPECTED_REPLICATION" ]] || { err "Expected replication ${EXPECTED_REPLICATION}, got ${actual_replication}."; exit 4; }
+  [[ "$actual_replication" == "$EXPECTED_REPLICATION" ]] || { err "Expected configured replication ${EXPECTED_REPLICATION}, got ${actual_replication}."; exit 4; }
+
+  # `-stat %r` shows the requested factor, not actual live replicas. `fsck`
+  # reports the number and endpoints of live replicas for each block; parse
+  # every block and require the configured count on distinct DataNodes.
+  fsck_report=$(compose exec -T "$NAMENODE_SERVICE" hdfs fsck "$INPUT_DIR/wordcount-input.txt" -files -blocks -locations 2>&1) || {
+    err 'HDFS fsck failed while verifying actual replicas.'
+    printf '%s\n' "$fsck_report" >&2
+    exit 4
+  }
+  if ! printf '%s\n' "$fsck_report" | python3 "$ROOT/scripts/assert-hdfs-replication.py" "$EXPECTED_REPLICATION"; then
+    err 'Actual HDFS block replication did not match the requested topology.'
+    printf '%s\n' "$fsck_report" >&2
+    exit 4
+  fi
 fi
 
 HADOOP_VERSION="${HADOOP_VERSION:-3.2.1}"

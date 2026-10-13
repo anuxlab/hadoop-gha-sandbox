@@ -1,10 +1,37 @@
-name: Distributed Hadoop proof of concept (manual)
+name: Distributed Hadoop proof of concept
 
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.env'
+      - 'docker-compose*.yml'
+      - 'hive/**'
+      - 'jobs/**'
+      - 'scripts/**'
+      - '.github/workflows/**'
+  push:
+    branches: [main]
+    paths:
+      - '.env'
+      - 'docker-compose*.yml'
+      - 'hive/**'
+      - 'jobs/**'
+      - 'scripts/**'
+      - '.github/workflows/**'
   workflow_dispatch:
+
+  # Nightly is intentionally DISABLED for now. To enable a daily run later,
+  # uncomment this schedule block. GitHub schedule times are in UTC.
+  # schedule:
+  #   - cron: '37 2 * * *'  # 08:07 Asia/Kolkata
 
 permissions:
   contents: read
+
+concurrency:
+  group: hadoop-distributed-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   distributed:
@@ -21,11 +48,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Test readiness parser regressions
+      - name: Test readiness and regression checks
         run: bash scripts/test-readiness-parsers.sh
 
-      - name: Validate configuration
+      - name: Validate Compose configuration
         run: docker compose config --quiet
+
+      - name: Record runner resources
+        run: |
+          docker --version
+          docker compose version
+          docker info --format 'Docker server: {{.ServerVersion}}; CPUs: {{.NCPU}}; memory bytes: {{.MemTotal}}'
 
       - name: Pull images
         run: docker compose pull
@@ -35,13 +68,13 @@ jobs:
           docker compose up -d --wait --wait-timeout 450
           docker compose ps -a
 
-      - name: Verify two DataNodes, two NodeManagers and MapReduce on YARN
+      - name: Verify HDFS replication and MapReduce on YARN
         run: |
           set -Eeuo pipefail
           mkdir -p artifacts
           bash scripts/run-wordcount.sh 2>&1 | tee artifacts/run-wordcount.log
 
-      - name: Verify two Spark workers and cross-engine results
+      - name: Verify Spark worker participation and cross-engine results
         run: |
           set -Eeuo pipefail
           mkdir -p artifacts
@@ -59,7 +92,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: diagnostics-distributed-${{ github.run_id }}
+          name: diagnostics-distributed-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/
           if-no-files-found: warn
           retention-days: 7
