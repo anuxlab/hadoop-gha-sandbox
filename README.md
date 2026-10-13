@@ -177,7 +177,7 @@ This is still a same-host simulation. Two DataNode containers do not simulate in
 
 ### Scale profile: multiple blocks, splits, records and Spark input workers
 
-The `scale` profile adds `docker-compose.scale.yml` after the distributed overlay. It sets HDFS's block size to 16 KiB for this test profile only. The test generator creates many separate text files; each file is constrained to exceed the block size, so the workload creates multiple blocks per file and multiple `FileInputFormat` splits without needing gigabytes of data.
+The `scale` profile adds `docker-compose.scale.yml` after the distributed overlay. It sets HDFS's block size and `dfs.namenode.fs-limits.min-block-size` to 16 KiB for this test profile only. Hadoop defaults the NameNode minimum block size to 1 MiB, so changing only `dfs.blocksize` is insufficient: the NameNode rejects the smaller blocks at `hdfs dfs -put`. The scale harness now checks both effective values before uploading any input and exits with a targeted error if the configuration did not apply. The test generator creates many separate text files; each file is constrained to exceed the block size, so the workload creates multiple blocks per file and multiple `FileInputFormat` splits without needing gigabytes of data. This lower minimum is solely for synthetic CI tests and must not be copied into production HDFS configuration.
 
 ```bash
 # Defaults: 24 files × 800 lines = 19,200 input records.

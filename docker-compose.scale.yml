@@ -1,5 +1,7 @@
 # Scale-test tuning only: small HDFS blocks make one synthetic file produce
-# multiple input splits without generating a huge amount of test data.
+# multiple input splits without generating a huge amount of test data. The NameNode
+# default minimum block size is 1 MiB, so lower that guard in this isolated profile
+# to match the 16 KiB test block size. Never use this setting for production HDFS.
 # This overlay must follow docker-compose.yml, docker-compose.spark.yml, and
 # docker-compose.distributed.yml in COMPOSE_FILE order.
 services:
@@ -7,6 +9,9 @@ services:
     environment:
       HDFS_CONF_dfs_blocksize: "16384"
       HDFS_CONF_dfs_replication: "2"
+      # Hadoop defaults dfs.namenode.fs-limits.min-block-size to 1 MiB.
+      # The scale profile intentionally uses tiny blocks to exercise split logic.
+      HDFS_CONF_dfs_namenode_fs___limits_min___block___size: "16384"
 
   datanode:
     environment:

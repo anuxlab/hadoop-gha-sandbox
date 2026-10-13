@@ -14,7 +14,7 @@ This document describes the next test layers for Hadoop GHA Sandbox. It is a des
 
 ## What the `scale` profile proves
 
-The scale profile keeps the cluster small but increases the number of input files and blocks. Its HDFS block size is set to 16 KiB in `docker-compose.scale.yml`. Each generated file is larger than that block size, which exercises more than one HDFS block and input split per file.
+The scale profile keeps the cluster small but increases the number of input files and blocks. Its HDFS block size and NameNode `dfs.namenode.fs-limits.min-block-size` are both set to 16 KiB in `docker-compose.scale.yml`. Hadoop's default minimum block size is 1 MiB; setting only `dfs.blocksize` causes the NameNode to reject `hdfs dfs -put` with `Specified block size is less than configured minimum value`. The scale script preflights both effective configuration values before generating/uploading data. The lowered minimum is isolated to this synthetic test profile and is not a production recommendation. Each generated file is larger than the test block size, which exercises more than one HDFS block and input split per file.
 
 Defaults are 24 files × 800 lines (19,200 records) and two reducers. Input bounds are validated before containers are started: 2–128 files, 600–2,000 lines per file, at most 128,000 records, 1–4 reducers, two DataNodes, two NodeManagers and two Spark workers. Keep these limits bounded on GitHub-hosted runners.
 

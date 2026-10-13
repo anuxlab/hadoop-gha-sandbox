@@ -278,7 +278,19 @@ for marker in ("number of splits", "Map input records=", "Launched reduce tasks=
 scale_compose = (root / "docker-compose.scale.yml").read_text()
 if 'HDFS_CONF_dfs_blocksize: "16384"' not in scale_compose:
     raise SystemExit("FAIL: scale overlay must use small blocks to exercise multi-block splits")
-print("[PASS] CI triggers, optional/manual scale workflow, and scale assertions are configured.")
+if 'HDFS_CONF_dfs_namenode_fs___limits_min___block___size: "16384"' not in scale_compose:
+    raise SystemExit("FAIL: NameNode minimum block size must be lowered to 16 KiB in the isolated scale overlay")
+# The bde2020 image convention maps single underscores to dots and triple
+# underscores to hyphens; assert this setting maps to Hadoop's exact property.
+encoded = "dfs_namenode_fs___limits_min___block___size"
+decoded = encoded.replace("___", "-").replace("_", ".")
+if decoded != "dfs.namenode.fs-limits.min-block-size":
+    raise SystemExit(f"FAIL: scale minimum-block-size env maps to {decoded!r}")
+scale_script = (root / "scripts/run-scale-test.sh").read_text()
+for marker in ("dfs.blocksize", "dfs.namenode.fs-limits.min-block-size", "configured_min_block_size"):
+    if marker not in scale_script:
+        raise SystemExit(f"FAIL: scale harness must preflight effective HDFS configuration ({marker})")
+print("[PASS] CI triggers, scale assertions, and tiny-block NameNode configuration are consistent.")
 PYWORKFLOW
 
 # Regression: invalid scale workload inputs must be rejected before Docker is

@@ -39,6 +39,21 @@ if ! compose ps --services --filter status=running | grep -Fxq namenode; then
   exit 2
 fi
 
+# Do not attempt to upload files until the effective NameNode config accepts the
+# deliberately small scale-test block size. The stock Hadoop default minimum is
+# 1 MiB and would reject 16 KiB blocks with an error from hdfs dfs -put.
+configured_block_size="$(compose exec -T namenode hdfs getconf -confKey dfs.blocksize | tr -d '\r')"
+configured_min_block_size="$(compose exec -T namenode hdfs getconf -confKey dfs.namenode.fs-limits.min-block-size | tr -d '\r')"
+if [[ "$configured_block_size" != "$SCALE_BLOCK_SIZE" ]]; then
+  err "Effective dfs.blocksize is ${configured_block_size:-<empty>}; expected ${SCALE_BLOCK_SIZE}. Check docker-compose.scale.yml and the NameNode environment."
+  exit 2
+fi
+if [[ "$configured_min_block_size" != "$SCALE_BLOCK_SIZE" ]]; then
+  err "Effective dfs.namenode.fs-limits.min-block-size is ${configured_min_block_size:-<empty>}; expected ${SCALE_BLOCK_SIZE}. The scale overlay must lower the NameNode's default 1 MiB minimum for this test-only topology."
+  exit 2
+fi
+log "Verified effective HDFS block size and minimum block size: ${configured_block_size} bytes."
+
 records=$((SCALE_FILES * SCALE_LINES_PER_FILE))
 hadoop_count=$((records * 2))
 log "Generating ${SCALE_FILES} files × ${SCALE_LINES_PER_FILE} lines = ${records} records; reducers=${SCALE_REDUCERS}; HDFS block size=${SCALE_BLOCK_SIZE}; expected replication=${EXPECTED_REPLICATION}."

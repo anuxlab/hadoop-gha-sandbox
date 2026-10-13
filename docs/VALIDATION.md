@@ -32,3 +32,14 @@ Docker/Compose is not installed in the authoring environment used for these pack
 3. Any future resilience or new-component profile before it is described as passing.
 
 Run the scale test manually from Actions → **Scalable HDFS and compute integration test**. Start with the defaults (24 files × 800 lines, two reducers); increase only after its runtime and memory use are known. Keep the nightly schedule disabled until the manual scale run is stable.
+
+
+## Scale workflow failure: run `38382194755`
+
+The first manual scale run failed during fixture upload, before MapReduce or Spark launched. The diagnostic `run-wordcount.log` contains:
+
+```text
+put: Specified block size is less than configured minimum value (dfs.namenode.fs-limits.min-block-size): 16384 < 1048576
+```
+
+Root cause: `docker-compose.scale.yml` set `dfs.blocksize=16384`, but Hadoop 3.2.1's NameNode default `dfs.namenode.fs-limits.min-block-size` remains 1 MiB. The NameNode therefore rejected each 16 KiB block request. The fix sets the minimum to 16384 **only in the isolated scale overlay** and adds a runtime preflight using `hdfs getconf -confKey` for both settings before the fixture upload. Regression tests assert the environment-variable encoding and preflight are present. This source fix still requires a new live GitHub Actions scale run; the current failed artifact does not validate the updated scale profile.
