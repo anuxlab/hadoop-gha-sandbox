@@ -83,6 +83,20 @@ cat > /opt/hive/conf/hive-site.xml <<'EOF'
     <name>hive.server2.thrift.bind.host</name>
     <value>0.0.0.0</value>
   </property>
+
+  <!-- Performance fixes: prevent CREATE TABLE from hanging -->
+  <property>
+    <name>hive.stats.autogather</name>
+    <value>false</value>
+  </property>
+  <property>
+    <name>hive.stats.collect.rawdatasize</name>
+    <value>false</value>
+  </property>
+  <property>
+    <name>hive.fetch.task.conversion</name>
+    <value>more</value>
+  </property>
 </configuration>
 EOF
 

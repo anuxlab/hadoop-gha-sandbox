@@ -7,8 +7,9 @@ set -euo pipefail
 
 HIVE_CONTAINER="${HIVE_CONTAINER:-hive-server}"
 INPUT_DIR="${1:-/test/output}"
+HDFS_URI="${HDFS_URI:-hdfs://namenode:9000}"
 READY_TIMEOUT="${READY_TIMEOUT:-300}"
-QUERY_TIMEOUT="${QUERY_TIMEOUT:-180}"
+QUERY_TIMEOUT="${QUERY_TIMEOUT:-120}"
 
 log()  { echo -e "\033[1;34m[INFO]\033[0m  $*"; }
 err()  { echo -e "\033[1;31m[ERROR]\033[0m $*" >&2; }
@@ -20,8 +21,6 @@ fi
 
 # ---------------------------------------------------------------------------
 # 1. Wait for HiveServer2 to be able to ACTUALLY serve queries.
-#    TCP-open is not enough: the Thrift server accepts connections before the
-#    metastore is loaded, causing queries to hang for minutes.
 # ---------------------------------------------------------------------------
 log "Waiting for HiveServer2 to be query-ready (timeout: ${READY_TIMEOUT}s)..."
 elapsed=0
@@ -48,7 +47,7 @@ fi
 log "HiveServer2 is query-ready (after ${elapsed}s)."
 
 # ---------------------------------------------------------------------------
-# 2. Write the HiveQL to a file inside the container.
+# 2. Write the HiveQL. LOCATION is a fully qualified HDFS URI.
 # ---------------------------------------------------------------------------
 log "Writing HiveQL to /tmp/query.hql inside the container..."
 docker exec -i "${HIVE_CONTAINER}" bash -c "cat > /tmp/query.hql" <<EOF
@@ -59,18 +58,16 @@ CREATE EXTERNAL TABLE wordcount (
 )
 ROW FORMAT DELIMITED FIELDS TERMINATED BY '\t'
 STORED AS TEXTFILE
-LOCATION '${INPUT_DIR}';
+LOCATION '${HDFS_URI}${INPUT_DIR}';
 
--- Simple projection, no ORDER BY (which would trigger a MapReduce job).
 SELECT word, count FROM wordcount LIMIT 20;
 EOF
 
-# Print the file content for debugging in CI logs
 log "Query file contents:"
 docker exec "${HIVE_CONTAINER}" cat /tmp/query.hql | sed 's/^/    /'
 
 # ---------------------------------------------------------------------------
-# 3. Run the query with tsv2 output (streams rows, no buffering bugs).
+# 3. Run the query. Use tsv2 output, stream rows, fail fast.
 # ---------------------------------------------------------------------------
 log "Running HiveQL query over ${INPUT_DIR} (timeout: ${QUERY_TIMEOUT}s)..."
 
@@ -85,6 +82,7 @@ if ! docker exec -i \
         -n root \
         --outputformat=tsv2 \
         --hiveconf hive.server2.enable.doAs=false \
+        --hiveconf hive.fetch.task.conversion=more \
         -f /tmp/query.hql </dev/null; then
     err "Hive query failed or timed out."
     err "Container logs (last 100 lines):"
