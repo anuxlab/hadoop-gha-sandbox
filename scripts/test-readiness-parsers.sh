@@ -91,11 +91,26 @@ exec(compile(ast.fix_missing_locations(module), str(job_path), "exec"), namespac
 actual = namespace["format_count_pair"](("Hadoop", 3))
 if actual != "Hadoop\t3":
     raise SystemExit("FAIL: Spark serializer returned {!r}, expected tab-separated output".format(actual))
-if "counts.map(format_count_pair).saveAsTextFile(OUTPUT_PATH)" not in source:
+if "saveAsTextFile(output_path)" not in source or "format_count_pair((item[0], item[1][0]))" not in source:
     raise SystemExit("FAIL: Spark save path does not apply the output serializer")
 if "counts.saveAsTextFile(OUTPUT_PATH)" in source:
     raise SystemExit("FAIL: Spark still serializes raw Python tuples")
-print("[PASS] Spark output uses normalized tab-separated word/count rows.")
+merger = next(
+    (node for node in tree.body if isinstance(node, ast.FunctionDef)
+     and node.name == "merge_word_count_metadata"),
+    None,
+)
+if merger is None:
+    raise SystemExit("FAIL: Spark job does not aggregate actual input-worker metadata")
+merge_module = ast.Module(body=[merger], type_ignores=[])
+merge_ns = {}
+exec(compile(ast.fix_missing_locations(merge_module), str(job_path), "exec"), merge_ns)
+merged = merge_ns["merge_word_count_metadata"]((2, frozenset(("worker-a",))), (3, frozenset(("worker-b",))))
+if merged[0] != 5 or merged[1] != frozenset(("worker-a", "worker-b")):
+    raise SystemExit("FAIL: actual-input worker metadata merge is incorrect: {!r}".format(merged))
+if "DEFAULT_WORDCOUNT_HOSTS_PATH" not in source or "counts.flatMap" not in source:
+    raise SystemExit("FAIL: Spark job must persist the hosts that processed actual WordCount input")
+print("[PASS] Spark output is normalized and actual WordCount worker metadata is aggregated.")
 SPARKTEST
 
 if grep -Fq "SELECT 1 FROM VERSION" "$ROOT/docker-compose.hive.yml"; then
@@ -153,6 +168,7 @@ workflows = [
     ".github/workflows/test-hadoop.yml",
     ".github/workflows/test-distributed.yml",
     ".github/workflows/test-full-stack.yml",
+    ".github/workflows/test-scale.yml",
 ]
 for rel in workflows:
     lines = (root / rel).read_text().splitlines()
@@ -216,6 +232,17 @@ if printf '%s\n' "$fsck_invalid_sample" | python3 "$ROOT/scripts/assert-hdfs-rep
 fi
 printf '[PASS] HDFS fsck parser verifies live replicas on distinct DataNodes.\n'
 
+# The scale profile should generate files larger than its configured block size
+# so it really tests multi-block files and more splits than files.
+python3 - <<'SCALEGEOMETRY'
+line_bytes = len(b"hadoop spark hadoop mapreduce\n")
+block_size = 16384
+minimum_lines = 600
+if line_bytes * minimum_lines <= block_size:
+    raise SystemExit("FAIL: minimum scale fixture does not cross the configured HDFS block boundary")
+print("[PASS] Minimum scale fixture crosses the 16 KiB HDFS block boundary.")
+SCALEGEOMETRY
+
 # Workflow triggers: full stack auto-runs on relevant PRs/pushes; distributed
 # runs on relevant PRs/pushes and manual dispatch. Nightly schedule stays off.
 python3 - "$ROOT" <<'PYWORKFLOW'
@@ -234,8 +261,40 @@ if not re.search(r"(?m)^  # schedule:", distributed):
 runner = (root / "scripts/run-profile.sh")
 if not runner.exists():
     raise SystemExit("FAIL: local reusable profile runner is missing")
-for profile in ("core", "hive", "spark", "full", "distributed"):
+if "docker-compose.yml:docker-compose.spark.yml:docker-compose.distributed.yml:docker-compose.scale.yml" not in runner.read_text():
+    raise SystemExit("FAIL: scale profile must layer the scale overlay after the distributed services")
+scale_workflow = (root / ".github/workflows/test-scale.yml").read_text()
+for profile in ("core", "hive", "spark", "full", "distributed", "scale"):
     if profile not in runner.read_text():
         raise SystemExit(f"FAIL: local profile runner is missing profile {profile}")
-print("[PASS] Automatic CI triggers, optional nightly behavior and local profile runner are configured.")
+if not re.search(r"(?m)^  workflow_dispatch:", scale_workflow):
+    raise SystemExit("FAIL: scalable workload must be manually dispatchable")
+if re.search(r"(?m)^  schedule:", scale_workflow):
+    raise SystemExit("FAIL: scalable workflow must not enable a schedule by default")
+scale_script = (root / "scripts/run-scale-test.sh").read_text()
+for marker in ("number of splits", "Map input records=", "Launched reduce tasks=", "assert-hdfs-replication.py", "REQUIRE_SPARK_DATA_WORKER_PARTICIPATION=1"):
+    if marker not in scale_script:
+        raise SystemExit(f"FAIL: scalable workload is missing assertion: {marker}")
+scale_compose = (root / "docker-compose.scale.yml").read_text()
+if 'HDFS_CONF_dfs_blocksize: "16384"' not in scale_compose:
+    raise SystemExit("FAIL: scale overlay must use small blocks to exercise multi-block splits")
+print("[PASS] CI triggers, optional/manual scale workflow, and scale assertions are configured.")
 PYWORKFLOW
+
+# Regression: invalid scale workload inputs must be rejected before Docker is
+# contacted; this test therefore runs on lightweight CI/static-test machines.
+set +e
+SCALE_FILES=1 bash "$ROOT/scripts/run-scale-test.sh" >"$tmp/scale-invalid-files.log" 2>&1
+bad_files_rc=$?
+SCALE_LINES_PER_FILE=10 bash "$ROOT/scripts/run-scale-test.sh" >"$tmp/scale-invalid-lines.log" 2>&1
+bad_lines_rc=$?
+SCALE_REDUCERS=10 bash "$ROOT/scripts/run-scale-test.sh" >"$tmp/scale-invalid-reducers.log" 2>&1
+bad_reducers_rc=$?
+set -e
+if [[ "$bad_files_rc" -ne 2 || "$bad_lines_rc" -ne 2 || "$bad_reducers_rc" -ne 2 ]]; then
+  printf 'FAIL: unsafe scale parameters must return exit code 2 (files=%s, lines=%s, reducers=%s).\n' \
+    "$bad_files_rc" "$bad_lines_rc" "$bad_reducers_rc" >&2
+  cat "$tmp/scale-invalid-files.log" "$tmp/scale-invalid-lines.log" "$tmp/scale-invalid-reducers.log" >&2
+  exit 1
+fi
+printf '[PASS] Scale workload rejects out-of-range inputs before Docker startup.\n'

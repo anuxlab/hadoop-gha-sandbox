@@ -3,8 +3,12 @@
 set -Eeuo pipefail
 SPARK_SERVICE="${SPARK_SERVICE:-spark-master}"
 MAX_WAIT_SECONDS="${MAX_WAIT_SECONDS:-180}"
-OUTPUT_PATH="/test/spark-output"
-WORKER_HOSTS_PATH="/test/spark-worker-hosts"
+INPUT_PATH="${SPARK_INPUT_PATH:-/test/input}"
+OUTPUT_PATH="${SPARK_OUTPUT_PATH:-/test/spark-output}"
+WORKER_HOSTS_PATH="${SPARK_WORKER_HOSTS_PATH:-/test/spark-worker-hosts}"
+WORDCOUNT_WORKER_HOSTS_PATH="${SPARK_WORDCOUNT_WORKER_HOSTS_PATH:-/test/spark-wordcount-worker-hosts}"
+MR_OUTPUT_PATH="${MR_OUTPUT_PATH:-/test/output}"
+REQUIRE_SPARK_DATA_WORKER_PARTICIPATION="${REQUIRE_SPARK_DATA_WORKER_PARTICIPATION:-0}"
 log() { printf '[INFO] %s\n' "$*"; }
 err() { printf '[ERROR] %s\n' "$*" >&2; }
 compose() { docker compose "$@"; }
@@ -31,8 +35,13 @@ if (( elapsed >= MAX_WAIT_SECONDS )); then
   exit 3
 fi
 
+if ! compose exec -T namenode hdfs dfs -test -e "$INPUT_PATH"; then
+  err "Spark input path does not exist in HDFS: ${INPUT_PATH}"
+  exit 4
+fi
 compose exec -T namenode hdfs dfs -rm -r -f "$OUTPUT_PATH" >/dev/null 2>&1 || true
 compose exec -T namenode hdfs dfs -rm -r -f "$WORKER_HOSTS_PATH" >/dev/null 2>&1 || true
+compose exec -T namenode hdfs dfs -rm -r -f "$WORDCOUNT_WORKER_HOSTS_PATH" >/dev/null 2>&1 || true
 log 'Checking Spark and Python runtimes...'
 compose exec -T "$SPARK_SERVICE" /spark/bin/spark-submit --version
 compose exec -T "$SPARK_SERVICE" python3 --version
@@ -49,26 +58,37 @@ compose exec -T "$SPARK_SERVICE" /spark/bin/spark-submit \
   --conf spark.driver.host=spark-master \
   --conf spark.hadoop.fs.defaultFS=hdfs://namenode:9000 \
   --conf spark.hadoop.dfs.replication="${EXPECTED_REPLICATION:-1}" \
-  /spark/jobs/wordcount.py
+  /spark/jobs/wordcount.py \
+  "$INPUT_PATH" "$OUTPUT_PATH" "$WORKER_HOSTS_PATH" "$WORDCOUNT_WORKER_HOSTS_PATH"
 
 compose exec -T namenode hdfs dfs -test -e "${OUTPUT_PATH}/_SUCCESS" || { err "Spark output marker missing at ${OUTPUT_PATH}/_SUCCESS."; exit 4; }
 compose exec -T namenode hdfs dfs -test -e "${WORKER_HOSTS_PATH}/_SUCCESS" || { err "Spark worker-host probe marker missing at ${WORKER_HOSTS_PATH}/_SUCCESS."; exit 4; }
+compose exec -T namenode hdfs dfs -test -e "${WORDCOUNT_WORKER_HOSTS_PATH}/_SUCCESS" || { err "Spark WordCount worker-host marker missing at ${WORDCOUNT_WORKER_HOSTS_PATH}/_SUCCESS."; exit 4; }
 
 mr_file=$(mktemp)
 spark_file=$(mktemp)
 worker_hosts_file=$(mktemp)
-trap 'rm -f "$mr_file" "$spark_file" "$worker_hosts_file"' EXIT
-compose exec -T namenode hdfs dfs -cat /test/output/part-r-* | awk 'NF >= 2 {print $1 "\t" $2}' | LC_ALL=C sort > "$mr_file"
+wordcount_hosts_file=$(mktemp)
+trap 'rm -f "$mr_file" "$spark_file" "$worker_hosts_file" "$wordcount_hosts_file"' EXIT
+compose exec -T namenode hdfs dfs -cat "${MR_OUTPUT_PATH}/part-r-*" | awk 'NF >= 2 {print $1 "\t" $2}' | LC_ALL=C sort > "$mr_file"
 compose exec -T namenode hdfs dfs -cat "${OUTPUT_PATH}/part-*" | awk 'NF >= 2 {print $1 "\t" $2}' | LC_ALL=C sort > "$spark_file"
 compose exec -T namenode hdfs dfs -cat "${WORKER_HOSTS_PATH}/part-*" | tr -d '\r' | sed '/^[[:space:]]*$/d' | LC_ALL=C sort -u > "$worker_hosts_file"
+compose exec -T namenode hdfs dfs -cat "${WORDCOUNT_WORKER_HOSTS_PATH}/part-*" | tr -d '\r' | sed '/^[[:space:]]*$/d' | LC_ALL=C sort -u > "$wordcount_hosts_file"
 actual_workers=$(wc -l < "$worker_hosts_file" | tr -d '[:space:]')
+actual_wordcount_workers=$(wc -l < "$wordcount_hosts_file" | tr -d '[:space:]')
 if [[ ! "$actual_workers" =~ ^[0-9]+$ ]] || (( actual_workers < expected_workers )); then
   err "Expected Spark tasks to execute on at least ${expected_workers} distinct worker host(s), observed ${actual_workers:-0}."
   printf 'Observed worker hosts:\n' >&2
   cat "$worker_hosts_file" >&2
   exit 5
 fi
-log "Spark tasks executed on ${actual_workers} distinct worker host(s): $(paste -sd, "$worker_hosts_file")."
+log "Spark scheduling probe executed on ${actual_workers} distinct worker host(s): $(paste -sd, "$worker_hosts_file")."
+log "WordCount input was processed on ${actual_wordcount_workers} distinct worker host(s): $(paste -sd, "$wordcount_hosts_file")."
+if [[ "$REQUIRE_SPARK_DATA_WORKER_PARTICIPATION" == "1" ]] && (( actual_wordcount_workers < expected_workers )); then
+  err "Expected WordCount input tasks on at least ${expected_workers} distinct worker host(s), observed ${actual_wordcount_workers}."
+  cat "$wordcount_hosts_file" >&2
+  exit 5
+fi
 if ! diff -u "$mr_file" "$spark_file"; then
   err 'Spark output differs from MapReduce output.'
   exit 5

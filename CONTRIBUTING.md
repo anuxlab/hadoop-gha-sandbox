@@ -15,7 +15,7 @@ From the repository root, run:
 
 ```bash
 # Shell syntax
-bash -n scripts/*.sh hive/entrypoint.sh
+for f in scripts/*.sh hive/entrypoint.sh; do bash -n "$f"; done
 
 # Fast parser/config regression suite
 bash scripts/test-readiness-parsers.sh
@@ -29,6 +29,7 @@ docker compose -f docker-compose.yml -f docker-compose.hive.yml config --quiet
 docker compose -f docker-compose.yml -f docker-compose.spark.yml config --quiet
 docker compose -f docker-compose.yml -f docker-compose.hive.yml -f docker-compose.spark.yml config --quiet
 docker compose -f docker-compose.yml -f docker-compose.spark.yml -f docker-compose.distributed.yml config --quiet
+docker compose -f docker-compose.yml -f docker-compose.spark.yml -f docker-compose.distributed.yml -f docker-compose.scale.yml config --quiet
 ```
 
 Then run the narrowest affected profile and its relevant integration dependencies:
@@ -39,6 +40,8 @@ bash scripts/run-profile.sh hive
 bash scripts/run-profile.sh spark
 bash scripts/run-profile.sh full
 bash scripts/run-profile.sh distributed
+# Opt-in scale workload; bounded to at most 128,000 records.
+SCALE_FILES=24 SCALE_LINES_PER_FILE=800 bash scripts/run-profile.sh scale
 ```
 
 `full` and `distributed` use more resources. Run them when changing overlays, shared Hadoop configuration, resource allocation, Hive configuration, Spark submission, or shared test harnesses.
@@ -70,6 +73,7 @@ When changing a Hadoop, Hive, Spark, Java, Python, or PostgreSQL image:
 - Keep diagnostics and cleanup under `if: always()` so failures remain debuggable.
 - Keep `fail-fast: false` in the profile matrix so one profile does not hide the results of others.
 - Keep nightly distributed CI disabled until a manual distributed run has passed and resource use is understood. The optional `schedule` snippet is commented in `.github/workflows/test-distributed.yml`.
+- Keep `.github/workflows/test-scale.yml` manual-only by default. Its inputs are bounded and its test sets a small HDFS block size to create multi-block, multi-split data without unbounded CI loads.
 - Make expensive profiles path-filtered where possible, but never suppress a genuine test failure with `continue-on-error`.
 - Do not expose service web UIs or ports to an untrusted network.
 
@@ -78,7 +82,8 @@ When changing a Hadoop, Hive, Spark, Java, Python, or PostgreSQL image:
 - [ ] The change and its scope are described, with the affected profiles listed.
 - [ ] Shell syntax and `scripts/test-readiness-parsers.sh` pass.
 - [ ] Python syntax passes if `jobs/` changed.
-- [ ] All affected Compose configurations validate.
+- [ ] All affected Compose configurations validate, including `docker-compose.scale.yml` if block-size/workload settings changed.
+- [ ] The scale workload verifies multiple HDFS blocks/splits, expected MapReduce record counters/reducer launches, live replica locations, and actual Spark input-worker participation when relevant.
 - [ ] Relevant GitHub Actions runs pass, or the PR clearly explains which runtime check could not be performed and why.
 - [ ] Logs/diagnostics do not contain secrets.
 - [ ] README or relevant comments describe new configuration, profiles, limitations, and troubleshooting.

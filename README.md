@@ -10,9 +10,10 @@ A small, reusable integration-test framework for validating HDFS, YARN/MapReduce
 - **Hive:** SQL via Beeline/HiveServer2 over a PostgreSQL-backed Hive Metastore, querying MapReduce data in HDFS.
 - **Spark:** PySpark on a standalone Spark master/worker, reading the same HDFS input and comparing results with MapReduce.
 - **Full stack:** Core + Hive + Spark concurrently in one Compose project.
-- **Distributed:** Two DataNodes, two NodeManagers, two Spark workers; asserts live HDFS replicas and records executor hosts to prove multiple Spark workers participated.
+- **Distributed:** Two DataNodes, two NodeManagers, two Spark workers; asserts live HDFS replicas and records executor hosts.
+- **Scale:** A manually triggered, parameterized workload profile uses many input files and a small HDFS block size to exercise multiple HDFS blocks/splits, YARN MapReduce counters, replication on distinct DataNodes, and Spark WordCount execution on multiple workers.
 
-The last full-stack baseline run supplied during development passed the core, Hive, and Spark assertions. Workflow trigger changes and the stronger executor-host probe in this version must still be verified by a new GitHub Actions run; static tests alone cannot prove a containerized integration run.
+The supplied diagnostics from run set `38378261082` / `38378261105` / `38378261106` show that core, Hive, standalone Spark, full-stack, and distributed profiles passed their current assertions. The scale profile and the stronger instrumentation introduced with it are new and have only been statically/regression validated in this package; run `test-scale.yml` in GitHub Actions before treating the new workload as integration-validated.
 
 ## Architecture
 
@@ -54,9 +55,10 @@ All services within a selected profile share a Compose bridge network and resolv
 | `hive` | Base + `docker-compose.hive.yml` | PostgreSQL availability, HiveServer2 query readiness, exact HiveQL results from HDFS | Every push/PR to `main` through the profile matrix |
 | `spark` | Base + `docker-compose.spark.yml` | Spark worker registration, executor-host probe, HDFS write, Spark/MapReduce equality | Every push/PR to `main` through the profile matrix |
 | `full` | Base + Hive + Spark overlays | Runs MapReduce, Hive, and Spark sequentially against one stack | Automatic on relevant code PRs/pushes to `main`; manual dispatch |
-| `distributed` | Base + Spark + distributed overlay | Two DataNodes/NodeManagers/workers; live HDFS replicas; Spark task participation on distinct worker hosts | Automatic on relevant code PRs/pushes to `main`; manual dispatch; nightly **disabled** |
+| `distributed` | Base + Spark + distributed overlay | Two DataNodes/NodeManagers/workers; replication checked against live distinct DataNode endpoints; Spark scheduling probe on distinct hosts | Automatic on relevant code PRs/pushes to `main`; manual dispatch; nightly **disabled** |
+| `scale` | Base + Spark + distributed + scale overlay | Parameterized multi-file/multi-block input; multiple MapReduce splits and record counters; replication for all input blocks; Spark WordCount input partitions observed on multiple worker hosts | **Manual only** through `test-scale.yml`; no schedule by default |
 
-`test-hadoop.yml` intentionally keeps a simple matrix of core/Hive/Spark profiles. The full-stack and distributed workflows use path filters so documentation-only edits do not start their larger stacks. The distributed workflow contains a commented example schedule; no nightly run is enabled until you uncomment it.
+`test-hadoop.yml` intentionally keeps a simple matrix of core/Hive/Spark profiles. The full-stack and distributed workflows use path filters so documentation-only edits do not start their larger stacks. The distributed workflow contains a commented example schedule; no nightly run is enabled until you uncomment it. The scale workflow is manually triggered and accepts workload size inputs to control runner cost. Its defaults are 24 files × 800 lines, two reducers, two DataNodes and two Spark workers; input bounds are validated before the containers are started.
 
 ## Compatibility and versions
 
@@ -71,6 +73,14 @@ The image tags are deliberately pinned to a known, older compatibility set for t
 | Python in Spark image | Verified in the supplied passing Spark diagnostics as Python 3.7.7 |
 
 These are community-maintained container images, not Apache-distributed production images. Before upgrading any tag, verify Java, Hadoop, Hive, Spark, and Python compatibility together, inspect the image-specific environment variable contract, run all profiles, and consider pinning image digests. The `HADOOP_MAPRED_HOME=/opt/hadoop-3.2.1/` settings must be updated with the Hadoop image version if you change the base tag.
+
+## Validation evidence
+
+See [Validation Evidence and Remaining Gates](docs/VALIDATION.md) for the uploaded CI run IDs, the exact assertions visible in their logs, the static checks performed for this package, and the new scale test's outstanding live-CI validation. This separates known passing behavior from newly added code that still requires a GitHub Actions run.
+
+## Scaling and adding components
+
+The detailed [Scaling and Component Extension Guide](docs/SCALING_AND_COMPONENTS.md) defines staged test tiers, the bounded scale workload, suggested HDFS/YARN/Spark resilience tests, optional component candidates, and a contract for adding a new Compose overlay without turning the base cluster into an oversized stack. Read this before adding components or enabling scheduled scale tests.
 
 ## Requirements
 
@@ -97,9 +107,12 @@ bash scripts/run-profile.sh hive
 bash scripts/run-profile.sh spark
 bash scripts/run-profile.sh full
 bash scripts/run-profile.sh distributed
+
+# Parameterized multi-file/multi-block scale run (manual/opt-in only).
+SCALE_FILES=24 SCALE_LINES_PER_FILE=800 bash scripts/run-profile.sh scale
 ```
 
-You do not need to run every profile locally every time. Start with `core`, then the profile you changed. Use `full` before merging broad cross-component changes and `distributed` for HDFS replication, YARN registration, and Spark worker participation.
+You do not need to run every profile locally every time. Start with `core`, then the profile you changed. Use `full` before merging broad cross-component changes, `distributed` for multi-worker registration/replication, and `scale` when you need to verify many input splits and actual Spark WordCount processing on multiple workers.
 
 Useful runner options:
 
@@ -154,13 +167,29 @@ The credentials in this repository are **test-only defaults** from the pinned co
 
 `scripts/run-spark-job.sh` checks the Spark master's REST API for the expected number of `ALIVE` workers, prints Spark/Python versions, submits PySpark to the standalone master, checks HDFS `_SUCCESS`, and compares normalized Spark output with MapReduce output.
 
-The job writes word/count records in Hadoop's tab-separated format rather than Python tuple formatting. It also runs a small executor-host probe and records distinct worker hostnames in `/test/spark-worker-hosts`. The harness verifies at least `EXPECTED_SPARK_WORKERS` distinct hosts participated. It does not collect the full WordCount result into the driver.
+The job writes word/count records in Hadoop's tab-separated format rather than Python tuple formatting. It records two different kinds of evidence: a small scheduling probe (`/test/spark-worker-hosts`) and the distinct hosts that processed actual WordCount input partitions (`/test/spark-wordcount-worker-hosts`). The normal smoke test checks the scheduling probe; the scale profile asserts that actual WordCount input was processed on multiple hosts. The job persists intermediate counts and does not collect the full WordCount result into the driver.
 
 ### Distributed profile
 
-The distributed overlay adds DataNode 2, NodeManager 2, and Spark worker 2. `run-wordcount.sh` checks worker registration and, when `EXPECTED_REPLICATION=2`, uses `fsck` output to assert the input block has two live replicas on distinct DataNode endpoints. Spark is given an application-wide core cap based on the expected worker count; the executor-host probe checks that tasks ran on distinct worker containers.
+The distributed overlay adds DataNode 2, NodeManager 2, and Spark worker 2. `run-wordcount.sh` checks worker registration and, when `EXPECTED_REPLICATION=2`, uses `fsck` output to assert the input block has two live replicas on distinct DataNode endpoints. The ordinary distributed smoke test also runs a Spark scheduling probe across worker hosts. The scale profile below adds a stronger assertion over the actual WordCount input partitions.
 
 This is still a same-host simulation. Two DataNode containers do not simulate independent host or rack failures. For production-like failure domains, run workers on separate VMs/hosts or use a separately managed test cluster.
+
+### Scale profile: multiple blocks, splits, records and Spark input workers
+
+The `scale` profile adds `docker-compose.scale.yml` after the distributed overlay. It sets HDFS's block size to 16 KiB for this test profile only. The test generator creates many separate text files; each file is constrained to exceed the block size, so the workload creates multiple blocks per file and multiple `FileInputFormat` splits without needing gigabytes of data.
+
+```bash
+# Defaults: 24 files × 800 lines = 19,200 input records.
+SCALE_FILES=24 SCALE_LINES_PER_FILE=800 bash scripts/run-profile.sh scale
+
+# A larger, still bounded workload: 48 files × 1,500 lines = 72,000 records.
+SCALE_FILES=48 SCALE_LINES_PER_FILE=1500 bash scripts/run-profile.sh scale
+```
+
+The runner enforces `2 <= SCALE_FILES <= 128`, `600 <= SCALE_LINES_PER_FILE <= 2000`, and at most 128,000 records. These bounds prevent accidental unbounded loads in CI. It checks (1) every HDFS block has the requested number of live replicas on distinct DataNodes, (2) the number of input splits exceeds the number of files, (3) MapReduce's `Map input records` counter equals the generated record count, (4) normalized output counts equal the deterministic expected counts, and (5) the actual Spark WordCount input path was processed on at least two distinct executor hosts. It then compares Spark output with the MapReduce output.
+
+The scale workflow `.github/workflows/test-scale.yml` is **manual only** by default. Use Actions → *Scalable HDFS and compute integration test* → *Run workflow*, then provide the `files` and `lines_per_file` inputs. You can also run it locally with `SCALE_FILES` and `SCALE_LINES_PER_FILE`. No nightly schedule is enabled for the scale workflow.
 
 ## GitHub Actions automation
 
@@ -168,7 +197,8 @@ The repository contains three workflows:
 
 - `.github/workflows/test-hadoop.yml`: core/Hive/Spark matrix on pushes and pull requests targeting `main`, plus manual dispatch.
 - `.github/workflows/test-full-stack.yml`: full stack automatically on pushes/pull requests targeting `main` when Compose, job, script, Hive, or workflow files change; also manually dispatchable.
-- `.github/workflows/test-distributed.yml`: distributed profile automatically on relevant code pushes/pull requests and manually dispatchable. Its nightly `schedule` block is **commented out**. Enable it only when nightly resource consumption is desired.
+- `.github/workflows/test-distributed.yml`: distributed profile automatically on relevant code pushes/pull requests and manually dispatchable. Its nightly `schedule` block is **commented out**.
+- `.github/workflows/test-scale.yml`: parameterized scale workload triggered manually only; no schedule by default.
 
 The workflows use minimal `contents: read` permissions, `set -Eeuo pipefail` when piping test logs through `tee`, timeouts, diagnostic collection with `if: always()`, artifact uploads, and `docker compose down -v --remove-orphans`. Diagnostic artifacts are retained for seven days. The full-stack and distributed profiles are more expensive than a single-profile matrix job, so watch Actions minutes and runner memory after enabling automatic triggers.
 
@@ -177,6 +207,9 @@ To run manually with GitHub CLI:
 ```bash
 gh workflow run test-full-stack.yml --ref main
 gh workflow run test-distributed.yml --ref main
+# Scale workflow is manually dispatched with bounded input settings in the UI;
+# for CLI use, pass workflow inputs supported by your gh version:
+gh workflow run test-scale.yml --ref main -f files=24 -f lines_per_file=800
 
 gh run list --workflow test-full-stack.yml --limit 3 \
   --json databaseId,status,conclusion,url --jq '.[] | [.databaseId,.status,.conclusion,.url] | @tsv'
@@ -202,7 +235,7 @@ The test harness is intentionally built around reusable assertions rather than t
 1. **Create an overlay** such as `docker-compose.ozone.yml` or `docker-compose.my-service.yml`. Add only the new service/configuration there; preserve the shared base services. Join the existing `hadoop_net` and use service names for DNS.
 2. **Define readiness properly.** Use healthchecks for process/service readiness, then add an application-level check (API call, SQL query, or HDFS/YARN command). `depends_on: condition: service_healthy` helps sequence startup but is not proof that a worker registered or a job succeeded.
 3. **Create a harness** under `scripts/` or a dedicated `tests/` directory. It should wait with a deadline, check exit codes, make deterministic assertions about data/state, capture useful logs, and clean up after success/failure.
-4. **Add a profile** to `scripts/run-profile.sh` if local reuse is useful, or define the explicit Compose file list and test step in a GitHub Actions workflow.
+4. **Add a profile** to `scripts/run-profile.sh` if local reuse is useful, or define the explicit Compose file list and test step in a GitHub Actions workflow. If the profile changes the HDFS block size or worker count, isolate those overrides in a dedicated Compose overlay.
 5. **Add regression coverage** to `scripts/test-readiness-parsers.sh` for known parsing/configuration failure modes. Never accept arbitrary three-digit HTTP statuses as readiness, ignore an error with `|| true` without a deliberate reason, or allow `tee` to mask a failed test.
 6. **Keep the test deterministic.** Use small fixture data, explicit input/output locations, known expected outputs, bounded timeouts, and removal of stale paths.
 7. **Collect diagnostics.** Preserve resolved Compose configuration, container state, all service logs, app/job status and harness output as artifacts, including on failure.
@@ -227,7 +260,7 @@ docker compose config --quiet
 PULL_IMAGES=1 bash scripts/run-profile.sh core
 ```
 
-For a GitLab CI or Jenkins job, archive `artifacts/**/*` whether the profile passes or fails. Use `bash scripts/run-profile.sh full` for integration across all services or `bash scripts/run-profile.sh distributed` for the multi-worker profile. The runner script pulls images by default, stores diagnostics, and tears down volumes unless failure-retention mode is explicitly selected.
+For a GitLab CI or Jenkins job, archive `artifacts/**/*` whether the profile passes or fails. Use `bash scripts/run-profile.sh full` for integration across all services, `bash scripts/run-profile.sh distributed` for the multi-worker profile, or `SCALE_FILES=24 SCALE_LINES_PER_FILE=800 bash scripts/run-profile.sh scale` for the bounded multi-block workload. The runner script pulls images by default, stores diagnostics, and tears down volumes unless failure-retention mode is explicitly selected.
 
 ## Scaling the simulation
 
@@ -235,12 +268,12 @@ Scale the *test properties you need to prove*, not simply the number of containe
 
 1. **Single-worker smoke tests:** cheap checks for config, HDFS I/O, YARN execution, Hive query behavior and Spark interoperability.
 2. **Two-worker integration:** prove replication factor 2, live replica locations, two registered YARN nodes, two registered Spark workers and Spark task participation on distinct hosts.
-3. **Multi-block / parallel workload tests:** generate files larger than the HDFS block size (or configure a smaller test block size in a dedicated profile), create multiple input splits, and assert actual map/reduce task counts and executor participation. Do not infer parallelism from service count.
+3. **Multi-block / parallel workload tests:** the opt-in `scale` profile generates files larger than the dedicated 16 KiB HDFS block size, creates multiple input splits, asserts MapReduce input counters, checks HDFS replicas for all blocks, and records worker hosts for the actual Spark WordCount data path. Do not infer parallelism from service count or from a scheduling-only probe.
 4. **Resilience profile:** deliberately stop a worker while a job is running, then assert expected retries/recovery and final job outcome. Run separately from ordinary PR tests to reduce flakiness.
 5. **Version matrix:** test compatible versions only. Use separate matrix jobs/profiles for tested Hadoop/Spark/Hive combinations; do not assume arbitrary cross-version compatibility.
 6. **Larger runners / independent VMs:** if combined memory usage is unstable, use a larger hosted runner or a multi-host lab. To test NameNode HA, ResourceManager HA, rack awareness, Kerberos, true network partitions or independent host failures, a same-runner Compose profile is insufficient.
 
-Do not run all high-cost profiles on every small documentation change. The current trigger setup runs the full stack and distributed profile for relevant code changes, keeps a manual dispatch path, and leaves nightly distributed runs off until deliberately enabled.
+Do not run all high-cost profiles on every small documentation change. The current trigger setup runs the full stack and distributed profile for relevant code changes, keeps manual dispatch for every workflow, keeps the scale workload manual-only, and leaves nightly distributed runs off until deliberately enabled.
 
 ## Troubleshooting
 
@@ -248,7 +281,7 @@ Do not run all high-cost profiles on every small documentation change. The curre
 2. Read the harness log first (`run-wordcount.log`, `run-hive-query.log`, or `run-spark-job.log`) and identify the first failing assertion.
 3. Inspect `compose-ps.txt` and the logs for the affected service; do not diagnose a downstream Spark/Hive missing-input error before checking whether the prerequisite MapReduce step passed.
 4. For `MRAppMaster` class-not-found errors, inspect `mapred-site.xml`, the `HADOOP_MAPRED_HOME` environment properties, and the MapReduce application JAR path in the client and NodeManager containers.
-5. For a Spark worker timeout, inspect the Spark master's `/json/` API and verify that workers are `ALIVE`; for distributed mode, check the persisted worker-host probe.
+5. For a Spark worker timeout, inspect the Spark master's `/json/` API and verify that workers are `ALIVE`; for the distributed smoke test, check the scheduling probe, and for the scale test inspect `run-scale-test.log` and the persisted WordCount data-worker host list.
 6. For replication failures, inspect `hdfs fsck <file> -files -blocks -locations` and distinguish the configured replication factor (`hdfs dfs -stat %r`) from the actual live replicas.
 7. For Hive startup failures, check PostgreSQL availability, metastore schema ownership/configuration and the first HiveServer2 error. A TCP-open port is not a successful SQL query.
 8. Change one cause at a time. Do not increase timeouts to compensate for a wrong config value, missing JAR or schema error.
@@ -262,6 +295,7 @@ These are the primary technical references used for architecture and test design
 - [HDFS Architecture](https://hadoop.apache.org/docs/r3.2.1/hadoop-project-dist/hadoop-hdfs/HdfsDesign.html) — NameNode, DataNodes, block storage, replication and placement.
 - [HDFS User Guide](https://hadoop.apache.org/docs/r3.2.1/hadoop-project-dist/hadoop-hdfs/HdfsUserGuide.html) — administration, safemode, `fsck`, and storage behavior.
 - [HDFS Commands Guide](https://hadoop.apache.org/docs/r3.2.1/hadoop-project-dist/hadoop-hdfs/HDFSCommands.html) — `hdfs fsck` and the `-files -blocks -locations` options.
+- [HDFS Scalability Guide](https://hadoop.apache.org/docs/r3.2.1/hadoop-project-dist/hadoop-hdfs/HdfsUserGuide.html#Scalability) — HDFS capacity and scalability concepts (not a benchmark target for this single-host PoC).
 - [Hadoop FileSystem Shell Guide](https://hadoop.apache.org/docs/r3.2.1/hadoop-project-dist/hadoop-common/FileSystemShell.html) — `hdfs dfs` operations.
 - [YARN Architecture](https://hadoop.apache.org/docs/r3.2.1/hadoop-yarn/hadoop-yarn-site/YARN.html) — ResourceManager, NodeManager and application execution model.
 - [MapReduce Tutorial](https://hadoop.apache.org/docs/r3.2.1/hadoop-mapreduce-client/hadoop-mapreduce-client-core/MapReduceTutorial.html) — job lifecycle, configuration and WordCount example.
@@ -277,6 +311,7 @@ These are the primary technical references used for architecture and test design
 
 - [Spark 3.0 Standalone Mode](https://spark.apache.org/docs/3.0.0/spark-standalone.html) — master/worker setup and standalone scheduling.
 - [Spark 3.0 RDD Programming Guide](https://spark.apache.org/docs/3.0.0/rdd-programming-guide.html) — transformations, actions, partitions and distributed task execution.
+- [Spark 3.0 Submitting Applications](https://spark.apache.org/docs/3.0.0/submitting-applications.html) — `spark-submit`, master selection, configuration and app arguments.
 - [Spark 3.0 Configuration](https://spark.apache.org/docs/3.0.0/configuration.html) — executor/driver memory and core settings.
 
 ### CI, containers and image-specific behavior

@@ -1,0 +1,19 @@
+# Scale-test tuning only: small HDFS blocks make one synthetic file produce
+# multiple input splits without generating a huge amount of test data.
+# This overlay must follow docker-compose.yml, docker-compose.spark.yml, and
+# docker-compose.distributed.yml in COMPOSE_FILE order.
+services:
+  namenode:
+    environment:
+      HDFS_CONF_dfs_blocksize: "16384"
+      HDFS_CONF_dfs_replication: "2"
+
+  datanode:
+    environment:
+      HDFS_CONF_dfs_blocksize: "16384"
+      HDFS_CONF_dfs_replication: "2"
+
+  datanode2:
+    environment:
+      HDFS_CONF_dfs_blocksize: "16384"
+      HDFS_CONF_dfs_replication: "2"

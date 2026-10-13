@@ -1,0 +1,66 @@
+name: Scalable HDFS and compute integration test
+
+# Manual by design: this profile creates many HDFS blocks and many MapReduce
+# splits, so keep it out of every-push CI until its runtime/cost is understood.
+on:
+  workflow_dispatch:
+    inputs:
+      files:
+        description: Number of input files (2-128)
+        type: number
+        required: true
+        default: 24
+      lines_per_file:
+        description: Lines per file (600-2000); each file crosses the 16 KiB block boundary
+        type: number
+        required: true
+        default: 800
+      reducers:
+        description: Number of MapReduce reducers (1-4)
+        type: number
+        required: true
+        default: 2
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hadoop-scale-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  scale:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      SCALE_FILES: ${{ inputs.files }}
+      SCALE_LINES_PER_FILE: ${{ inputs.lines_per_file }}
+      SCALE_REDUCERS: ${{ inputs.reducers }}
+      MAX_WAIT_SECONDS: "240"
+      READY_TIMEOUT: "360"
+      STARTUP_TIMEOUT: "450"
+      PULL_IMAGES: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run static and regression checks
+        run: bash scripts/test-readiness-parsers.sh
+
+      - name: Show runner and Docker resources
+        run: |
+          docker --version
+          docker compose version
+          docker info --format 'Docker server: {{.ServerVersion}}; CPUs: {{.NCPU}}; memory bytes: {{.MemTotal}}'
+
+      - name: Run scale profile
+        run: bash scripts/run-profile.sh scale
+
+      - name: Upload scale diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostics-scale-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 14

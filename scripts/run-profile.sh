@@ -7,7 +7,7 @@ cd "$ROOT"
 
 profile="${1:-}"
 if [[ -z "$profile" ]]; then
-  echo "Usage: $0 {core|hive|spark|full|distributed}" >&2
+  echo "Usage: $0 {core|hive|spark|full|distributed|scale}" >&2
   exit 2
 fi
 
@@ -47,8 +47,16 @@ case "$profile" in
     export EXPECTED_SPARK_WORKERS="${EXPECTED_SPARK_WORKERS:-2}"
     export EXPECTED_REPLICATION="${EXPECTED_REPLICATION:-2}"
     ;;
+  scale)
+    export COMPOSE_FILE='docker-compose.yml:docker-compose.spark.yml:docker-compose.distributed.yml:docker-compose.scale.yml'
+    export EXPECTED_DATANODES="${EXPECTED_DATANODES:-2}"
+    export EXPECTED_NODEMANAGERS="${EXPECTED_NODEMANAGERS:-2}"
+    export EXPECTED_SPARK_WORKERS="${EXPECTED_SPARK_WORKERS:-2}"
+    export EXPECTED_REPLICATION="${EXPECTED_REPLICATION:-2}"
+    export SPARK_TOTAL_CORES="${SPARK_TOTAL_CORES:-2}"
+    ;;
   *)
-    echo "Unknown profile '$profile'. Use core, hive, spark, full, or distributed." >&2
+    echo "Unknown profile '$profile'. Use core, hive, spark, full, distributed, or scale." >&2
     exit 2
     ;;
 esac
@@ -109,6 +117,10 @@ case "$profile" in
   spark|full|distributed)
     log 'Running Spark integration and cross-engine comparison...'
     bash scripts/run-spark-job.sh 2>&1 | tee "$artifact_dir/run-spark-job.log"
+    ;;
+  scale)
+    log 'Running multi-file, multi-block scale workload...'
+    bash scripts/run-scale-test.sh 2>&1 | tee "$artifact_dir/run-scale-test.log"
     ;;
 esac
 log "Profile '${profile}' passed."
