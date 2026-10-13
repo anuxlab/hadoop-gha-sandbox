@@ -41,7 +41,9 @@ cat > /opt/hive/conf/hive-site.xml <<XML
   <property><name>javax.jdo.option.ConnectionPassword</name><value>${DB_PASSWORD}</value></property>
   <property><name>hive.metastore.warehouse.dir</name><value>/user/hive/warehouse</value></property>
   <property><name>hive.metastore.schema.verification</name><value>false</value></property>
-  <property><name>datanucleus.schema.autoCreateAll</name><value>true</value></property>
+  <!-- The bde2020 PostgreSQL image initializes the Hive 2.3 schema.
+       Do not let DataNucleus attempt DDL as the non-owner `hive` role. -->
+  <property><name>datanucleus.schema.autoCreateAll</name><value>false</value></property>
   <property><name>hive.server2.enable.doAs</name><value>false</value></property>
   <property><name>hive.server2.authentication</name><value>NOSASL</value></property>
   <property><name>hive.server2.thrift.port</name><value>10000</value></property>

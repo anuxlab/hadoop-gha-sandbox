@@ -25,8 +25,11 @@ wait_for_cluster() {
   # `hadoop getconf` reads generic Hadoop configuration and may not load
   # mapred-site.xml. Inspect the generated MapReduce config directly here;
   # the subsequent YARN application-state assertion proves actual execution.
-  framework_output=$(compose exec -T "$NAMENODE_SERVICE" bash -lc \
-    "sed -n '/<name>mapreduce.framework.name<\\/name>/s#.*<value>\\([^<]*\\)</value>.*#\\1#p' /etc/hadoop/mapred-site.xml" 2>&1) || {
+  # Do not use `bash -l` here: the image's login profile prints
+  # `mesg: ttyname failed` on non-interactive Docker execs, contaminating stdout.
+  # A non-login POSIX shell keeps the captured value machine-readable.
+  framework_output=$(compose exec -T "$NAMENODE_SERVICE" sh -c \
+    "sed -n '/<name>mapreduce.framework.name<\\/name>/s#.*<value>\\([^<]*\\)</value>.*#\\1#p' /etc/hadoop/mapred-site.xml" 2>/dev/null) || {
       err "Unable to read mapreduce.framework.name from /etc/hadoop/mapred-site.xml."
       printf '%s\n' "$framework_output" >&2
       err "Check MAPRED_CONF_mapreduce_framework_name and the image's config generation."

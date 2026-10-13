@@ -19,6 +19,19 @@ framework="$(sed -n '/<name>mapreduce.framework.name<\/name>/s#.*<value>\([^<]*\
 }
 printf '[PASS] MapReduce framework parser returns only the requested property.\n'
 
+# Regression: production readiness check must not use a login shell, whose
+# profile emits `mesg: ttyname failed` into captured stdout on this image.
+grep -Fq 'compose exec -T "$NAMENODE_SERVICE" sh -c' "$ROOT/scripts/run-wordcount.sh" || {
+  printf 'FAIL: framework check must use a non-login shell.\n' >&2
+  exit 1
+}
+if grep -Fq 'compose exec -T "$NAMENODE_SERVICE" bash -lc' "$ROOT/scripts/run-wordcount.sh"; then
+  printf 'FAIL: login shell can contaminate framework parser output.\n' >&2
+  exit 1
+fi
+printf '[PASS] Framework readiness command avoids login-shell stdout noise.\n'
+
+
 cat > "$tmp/spark-master.json" <<'JSON'
 {"workers":[
   {"id":"worker-1","state":"ALIVE","cores":1},
@@ -41,4 +54,8 @@ grep -Fq "psql -U postgres -d metastore -tAc 'SELECT 1'" "$ROOT/docker-compose.h
   printf 'FAIL: expected SQL-level PostgreSQL readiness check.\n' >&2
   exit 1
 }
-printf '[PASS] Hive database healthcheck does not depend on Hive schema initialization.\n'
+grep -Fq '<name>datanucleus.schema.autoCreateAll</name><value>false</value>' "$ROOT/hive/entrypoint.sh" || {
+  printf 'FAIL: Hive must not try to recreate schema objects owned by postgres.\n' >&2
+  exit 1
+}
+printf '[PASS] Hive database healthcheck and schema ownership settings are safe.\n'
