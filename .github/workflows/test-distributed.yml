@@ -21,6 +21,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Test readiness parser regressions
+        run: bash scripts/test-readiness-parsers.sh
+
       - name: Validate configuration
         run: docker compose config --quiet
 

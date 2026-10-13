@@ -26,13 +26,13 @@ wait_for_cluster() {
   # mapred-site.xml. Inspect the generated MapReduce config directly here;
   # the subsequent YARN application-state assertion proves actual execution.
   framework_output=$(compose exec -T "$NAMENODE_SERVICE" bash -lc \
-    "grep -A 1 '<name>mapreduce.framework.name</name>' /etc/hadoop/mapred-site.xml | sed -nE 's#.*<value>([^<]+)</value>.*#\\1#p'" 2>&1) || {
+    "sed -n '/<name>mapreduce.framework.name<\\/name>/s#.*<value>\\([^<]*\\)</value>.*#\\1#p' /etc/hadoop/mapred-site.xml" 2>&1) || {
       err "Unable to read mapreduce.framework.name from /etc/hadoop/mapred-site.xml."
       printf '%s\n' "$framework_output" >&2
       err "Check MAPRED_CONF_mapreduce_framework_name and the image's config generation."
       return 3
     }
-  framework=$(printf '%s\n' "$framework_output" | tr -d '\r' | tail -n 1 | xargs)
+  framework=$(printf '%s\n' "$framework_output" | tr -d '\r' | sed '/^[[:space:]]*$/d' | head -n 1 | xargs)
   if [[ "$framework" != "yarn" ]]; then
     err "Expected mapreduce.framework.name=yarn, got '${framework:-<empty>}'." 
     printf '%s\n' "$framework_output" >&2

@@ -7,10 +7,11 @@ services:
       POSTGRES_DB: postgres
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: hive
-    # The image init script creates the `metastore` database and Hive schema.
-    # Check the schema VERSION table, not just PostgreSQL TCP readiness.
+    # Health means PostgreSQL is accepting SQL against the metastore database.
+    # Do NOT require the Hive VERSION table here: Hive initializes that schema
+    # only after hive-server starts, so that check creates a dependency deadlock.
     healthcheck:
-      test: ["CMD-SHELL", "psql -U postgres -d metastore -tAc 'SELECT 1 FROM VERSION LIMIT 1' | grep -qx 1"]
+      test: ["CMD-SHELL", "psql -U postgres -d metastore -tAc 'SELECT 1' | grep -qx 1"]
       interval: 5s
       timeout: 5s
       retries: 40

@@ -72,9 +72,10 @@ The distributed test waits for two registered DataNodes and NodeManagers, sets t
 
 ## Test behavior
 
-- `scripts/run-wordcount.sh` waits for the expected HDFS/YARN workers, checks that `mapreduce.framework.name=yarn`, uploads a deterministic fixture, submits the Hadoop examples WordCount job, checks `_SUCCESS`, and compares all expected word/count pairs.
-- `scripts/run-hive-query.sh` waits for a real Beeline `SELECT 1`, creates an external Hive table over the MapReduce output and compares returned rows with expected counts.
-- `scripts/run-spark-job.sh` checks Spark master worker registration, reports Spark/Python versions, submits a PySpark job, checks `_SUCCESS` and compares Spark output to MapReduce output.
+- `scripts/test-readiness-parsers.sh` runs fast regression tests for the MapReduce XML parser, Spark's `ALIVE` worker-state field, and the Hive/PostgreSQL healthcheck dependency.
+- `scripts/run-wordcount.sh` waits for the expected HDFS/YARN workers, checks `mapreduce.framework.name=yarn` using only that XML property (without capturing the next property's value), uploads a deterministic fixture, submits the Hadoop examples WordCount job, checks `_SUCCESS`, and compares all expected word/count pairs.
+- `scripts/run-hive-query.sh` waits for a real Beeline `SELECT 1`, creates an external Hive table over the MapReduce output and compares returned rows with expected counts. PostgreSQL health means SQL/database availability, not existence of Hive's `VERSION` table; Hive initializes that schema after HiveServer2 can start.
+- `scripts/run-spark-job.sh` checks Spark master worker registration using the `state=ALIVE` field returned by the Spark 3.0 REST API, reports Spark/Python versions, submits a PySpark job, checks `_SUCCESS` and compares Spark output to MapReduce output.
 - CI saves Compose configuration, service state and logs as artifacts, even after failure. Teardown removes containers and volumes to avoid state leaking into future runs.
 
 ## Resource and compatibility notes

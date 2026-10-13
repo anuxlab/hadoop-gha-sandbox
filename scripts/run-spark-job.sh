@@ -15,7 +15,8 @@ elapsed=0
 expected_workers="${EXPECTED_SPARK_WORKERS:-1}"
 while (( elapsed < MAX_WAIT_SECONDS )); do
   worker_json=$(compose exec -T "$SPARK_SERVICE" curl -fsS http://localhost:8080/json/ 2>/dev/null || true)
-  worker_count=$(printf '%s' "$worker_json" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(sum(1 for w in d.get("workers", []) if w.get("alive")))' 2>/dev/null || true)
+  # Spark 3.0 exposes worker state as "ALIVE"; it may not expose a boolean "alive".
+  worker_count=$(printf '%s' "$worker_json" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(sum(1 for w in d.get("workers", []) if w.get("alive") is True or str(w.get("state", "")).upper() == "ALIVE"))' 2>/dev/null || true)
   if [[ "$worker_count" =~ ^[0-9]+$ ]] && (( worker_count >= expected_workers )); then
     log "Spark reports ${worker_count} live worker(s)."
     break
