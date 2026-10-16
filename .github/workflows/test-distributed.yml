@@ -19,8 +19,8 @@ on:
       - 'jobs/**'
       - 'scripts/**'
       - '.github/workflows/**'
-  schedule:
-    - cron: '37 2 * * *' # Daily distributed-topology regression (02:37 UTC).
+  # schedule:
+  #   - cron: '37 2 * * *' # Daily distributed-topology regression (02:37 UTC).
   workflow_dispatch: # Optional rerun; not required for automation.
 
 permissions:
