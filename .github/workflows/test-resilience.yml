@@ -19,8 +19,8 @@ on:
       - 'jobs/**'
       - 'scripts/**'
       - '.github/workflows/**'
-  schedule:
-    - cron: '53 2 * * *' # Daily regression; scheduled events use the default branch.
+  # schedule:
+  #   - cron: '53 2 * * *' # Daily regression; scheduled events use the default branch.
   workflow_dispatch: # Optional manual reruns; automation does not depend on this event.
 
 permissions:
