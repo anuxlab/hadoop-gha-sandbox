@@ -21,8 +21,8 @@ on:
       - 'jobs/**'
       - 'scripts/**'
       - '.github/workflows/**'
-  schedule:
-    - cron: '47 2 * * *' # Daily bounded scale regression (02:47 UTC).
+  # schedule:
+  #   - cron: '47 2 * * *' # Daily bounded scale regression (02:47 UTC).
   workflow_dispatch:
     inputs:
       files:
