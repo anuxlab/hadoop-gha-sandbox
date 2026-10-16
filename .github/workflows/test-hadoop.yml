@@ -5,8 +5,8 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  schedule:
-    - cron: '17 2 * * *' # Daily smoke matrix (02:17 UTC).
+  # schedule:
+  #   - cron: '17 2 * * *' # Daily smoke matrix (02:17 UTC).
   workflow_dispatch: # Optional rerun; not required for automation.
 
 permissions:
